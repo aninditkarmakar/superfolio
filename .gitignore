@@ -1,4 +1,5 @@
 scratch/*
+.worktrees/
 .projectCopilot/
 __pycache__/
 *.py[cod]
