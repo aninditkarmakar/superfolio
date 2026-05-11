@@ -1,0 +1,4 @@
+%syntax-version=1.0.0
+%project=superfolio
+
+create_books 2026-05-11T15:13:52Z node <node@8c0fc730d16a> # Create example books table

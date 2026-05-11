@@ -20,7 +20,7 @@ The architecture follows a **"Python for Data, TypeScript for UI"** philosophy.
 | Layer | Technology | Status |
 | :--- | :--- | :--- |
 | **Data Engine** | Python 3.12 (stdlib only) | ✅ Implemented |
-| **Database** | PostgreSQL (Supabase) | 🗓 Planned |
+| **Database** | PostgreSQL + Sqitch migrations | 🚧 Scaffolded |
 | **API** | Next.js Route Handlers | 🗓 Planned |
 | **Frontend** | Next.js + Tremor.so | 🗓 Planned |
 | **Automation** | GitHub Actions | 🗓 Planned |
@@ -37,6 +37,14 @@ portfolio_engine/        # Python calculation engine (no third-party deps)
 
 scripts/
   calculate_twr.py       # End-to-end CLI: Flex XML → TWR → optional CSV export
+
+migrations/
+  deploy/                # Sqitch deploy scripts
+  revert/                # Sqitch revert scripts
+  verify/                # Sqitch verification scripts
+  sqitch.plan            # Ordered migration plan
+
+sqitch.conf              # Sqitch project configuration
 
 scratch/                 # Local-only IBKR Flex XML samples (git-ignored, not committed)
 ```
@@ -107,6 +115,92 @@ This project uses **VS Code Dev Containers** for a reproducible local setup.
 * **Database Client:** `postgresql-client` — includes `psql` for testing PostgreSQL/Neon connections
 
 No third-party Python packages are required by the current engine — it uses only the standard library (`xml.etree`, `csv`, `dataclasses`, `decimal`, `pathlib`).
+
+## 📊 Database Migrations
+
+Database changes are managed with [Sqitch](https://sqitch.org/) against PostgreSQL. Migration scripts live under `migrations/`, with project configuration in [`sqitch.conf`](sqitch.conf).
+
+The current example migration creates a simple `example.books` table, keeping example/demo objects out of the default `public` schema:
+
+```text
+migrations/
+  deploy/create_books.sql
+  revert/create_books.sql
+  verify/create_books.sql
+  sqitch.plan
+```
+
+### Install Sqitch locally
+
+Sqitch is not yet installed by the dev container. Install it in the current environment before running migrations:
+
+```bash
+sudo apt-get update
+sudo apt-get install -y sqitch libdbd-pg-perl postgresql-client
+sqitch --version
+```
+
+### Configure the database URL
+
+Keep connection strings out of Git. Add your Neon connection string to the ignored local `.env` file:
+
+```dotenv
+DATABASE_URL=postgresql://USER:PASSWORD@HOST/neondb?sslmode=require&channel_binding=require
+```
+
+Load it from the repository root without printing the secret, then convert the PostgreSQL URL to Sqitch's `db:pg:` target URI:
+
+```bash
+export DATABASE_URL="$(grep -E '^DATABASE_URL=' .env | tail -n 1 | cut -d= -f2-)"
+export SQITCH_TARGET="db:pg:${DATABASE_URL#postgresql:}"
+```
+
+### Run migrations
+
+Check the current database state, deploy pending changes, and run Sqitch verification:
+
+```bash
+sqitch status "$SQITCH_TARGET"
+sqitch deploy "$SQITCH_TARGET"
+sqitch verify "$SQITCH_TARGET"
+```
+
+Confirm the example table exists:
+
+```bash
+psql "$DATABASE_URL" -c "\d example.books"
+```
+
+### Roll back while developing
+
+Sqitch reverts back to a target change, not a Git-style `HEAD` reference. For the current single example migration, revert back to the empty baseline:
+
+```bash
+sqitch revert "$SQITCH_TARGET" --to-change @ROOT
+```
+
+When the plan has multiple migrations, revert only the latest migration by targeting the previous deployed change:
+
+```bash
+sqitch revert "$SQITCH_TARGET" --to-change previous_change_name
+```
+
+Then deploy again when ready:
+
+```bash
+sqitch deploy "$SQITCH_TARGET"
+sqitch verify "$SQITCH_TARGET"
+```
+
+### Add future migrations
+
+Create a new change with:
+
+```bash
+sqitch add change_name -n 'Describe the database change'
+```
+
+Sqitch creates matching files under `migrations/deploy/`, `migrations/revert/`, and `migrations/verify/`. Fill in all three files so every migration can be deployed, rolled back, and verified.
 
 ## 📊 Planned Database Schema
 
