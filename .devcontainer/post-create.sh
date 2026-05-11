@@ -12,6 +12,12 @@ mkdir -p ~/.copilot/installed-plugins
 rm -rf .projectCopilot/installed-plugins
 ln -s ~/.copilot/installed-plugins .projectCopilot/installed-plugins
 
+# Re-register marketplace and reinstall plugins so the container state
+# stays in sync with what settings.json records after a rebuild.
+copilot plugin marketplace remove superpowers-marketplace --force 2>/dev/null || true
+copilot plugin marketplace add obra/superpowers-marketplace
+copilot plugin install superpowers@superpowers-marketplace
+
 # Configure git identity from .env if present
 if [ -f .env ]; then
   GITHUB_NAME=$(grep -E '^GITHUB_NAME=' .env | cut -d '=' -f2- | tr -d '"' | tr -d "'")
