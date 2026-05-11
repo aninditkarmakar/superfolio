@@ -102,8 +102,9 @@ Daily output written to output/twr.csv
 This project uses **VS Code Dev Containers** for a reproducible local setup.
 
 ### `.devcontainer/devcontainer.json`
-* **Base Image:** `mcr.microsoft.com/devcontainers/typescript-node:4-24-trixie` (Node.js/TypeScript host)
+* **Base Image:** `mcr.microsoft.com/devcontainers/typescript-node:4-24-trixie` (Node.js/TypeScript host, extended via `.devcontainer/Dockerfile`)
 * **Python Feature:** `ghcr.io/devcontainers/features/python:1` — Python 3.12 with pip and JupyterLab
+* **Database Client:** `postgresql-client` — includes `psql` for testing PostgreSQL/Neon connections
 
 No third-party Python packages are required by the current engine — it uses only the standard library (`xml.etree`, `csv`, `dataclasses`, `decimal`, `pathlib`).
 
