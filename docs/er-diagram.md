@@ -11,7 +11,7 @@ erDiagram
     ACCOUNTS ||--o{ SOURCE_RECORDS : owns
     INGESTION_RUNS ||--o{ SOURCE_RECORDS : produced
     SOURCE_RECORDS ||--o| CASH_FLOWS : normalizes
-    SOURCE_RECORDS ||--o| DAILY_SNAPSHOTS : normalizes
+    SOURCE_RECORDS ||--o| DAILY_NAV_SNAPSHOTS : normalizes
 ```
 
 ## Detailed ERD
@@ -81,7 +81,7 @@ erDiagram
         text description
     }
 
-    DAILY_SNAPSHOTS {
+    DAILY_NAV_SNAPSHOTS {
         uuid id PK
         uuid account_id FK
         uuid source_record_id FK
@@ -95,10 +95,10 @@ erDiagram
     BROKERAGES ||--o{ SOURCE_RECORDS : identifies
     ACCOUNTS ||--o{ SOURCE_RECORDS : owns
     ACCOUNTS ||--o{ CASH_FLOWS : has
-    ACCOUNTS ||--o{ DAILY_SNAPSHOTS : has
+    ACCOUNTS ||--o{ DAILY_NAV_SNAPSHOTS : has
     INGESTION_RUNS ||--o{ SOURCE_RECORDS : produced
     SOURCE_RECORDS ||--o| CASH_FLOWS : becomes
-    SOURCE_RECORDS ||--o| DAILY_SNAPSHOTS : becomes
+    SOURCE_RECORDS ||--o| DAILY_NAV_SNAPSHOTS : becomes
 ```
 
 ## Tables
@@ -187,7 +187,7 @@ Stores normalized external cash movements from IBKR `CashTransaction` rows.
 
 Recommended constraint: `UNIQUE (source_record_id)`.
 
-### `daily_snapshots`
+### `daily_nav_snapshots`
 
 Stores one canonical daily NAV snapshot per account and valuation date from `EquitySummaryByReportDateInBase`.
 
@@ -208,6 +208,6 @@ Recommended constraints: `UNIQUE (source_record_id)` and `UNIQUE (account_id, sn
 
 `source_records` tracks unique broker-origin rows. It answers: have we already seen this exact broker event or daily valuation?
 
-This separation matters because Flex outputs can overlap. A scheduled pull, initial historical file, and manual missed-days backfill can all contain the same broker records. The importer should compute the same `dedupe_key` for the same broker event, upsert into `source_records`, and only create `cash_flows` or `daily_snapshots` when a new source record is inserted.
+This separation matters because Flex outputs can overlap. A scheduled pull, initial historical file, and manual missed-days backfill can all contain the same broker records. The importer should compute the same `dedupe_key` for the same broker event, upsert into `source_records`, and only create `cash_flows` or `daily_nav_snapshots` when a new source record is inserted.
 
 For IBKR cash transactions, the dedupe key should prefer a broker-provided transaction identifier when available. If no stable external ID exists, the fallback fingerprint should be built from normalized source fields such as brokerage code, account external ID, record type, relevant dates, currency, amount, transaction type, and broker description.
