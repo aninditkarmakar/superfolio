@@ -116,6 +116,26 @@ This project uses **VS Code Dev Containers** for a reproducible local setup.
 
 No third-party Python packages are required by the current engine — it uses only the standard library (`xml.etree`, `csv`, `dataclasses`, `decimal`, `pathlib`).
 
+### `.env` — local configuration
+
+Create a `.env` file at the repository root (it is git-ignored). The dev container's `post-create.sh` reads this file on every container rebuild, so set it up once and it is applied automatically.
+
+```dotenv
+# Git identity — used by .devcontainer/post-create.sh to run
+# `git config --global user.name` and `git config --global user.email`
+GITHUB_NAME=Your Name
+GITHUB_EMAIL=your-id+handle@users.noreply.github.com
+
+# Database — Neon/PostgreSQL connection string (see Database Migrations section)
+DATABASE_URL=postgresql://USER:PASSWORD@HOST/neondb?sslmode=require&channel_binding=require
+```
+
+| Key | Required by | Purpose |
+| :--- | :--- | :--- |
+| `GITHUB_NAME` | dev container (`post-create.sh`) | Sets `git config --global user.name` inside the container |
+| `GITHUB_EMAIL` | dev container (`post-create.sh`) | Sets `git config --global user.email` inside the container |
+| `DATABASE_URL` | Sqitch migrations | PostgreSQL connection string for `sqitch deploy/verify` |
+
 ## 📊 Database Migrations
 
 Database changes are managed with [Sqitch](https://sqitch.org/) against PostgreSQL. Migration scripts live under `migrations/`, with project configuration in [`sqitch.conf`](sqitch.conf).
@@ -142,11 +162,7 @@ sqitch --version
 
 ### Configure the database URL
 
-Keep connection strings out of Git. Add your Neon connection string to the ignored local `.env` file:
-
-```dotenv
-DATABASE_URL=postgresql://USER:PASSWORD@HOST/neondb?sslmode=require&channel_binding=require
-```
+Keep connection strings out of Git. Add your Neon connection string to the ignored local `.env` file (see the [`.env` reference](#env--local-configuration) in the Development Environment section for the full template).
 
 Load it from the repository root without printing the secret, then convert the PostgreSQL URL to Sqitch's `db:pg:` target URI:
 
