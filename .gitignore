@@ -1,4 +1,5 @@
 scratch/*
+.projectCopilot/
 __pycache__/
 *.py[cod]
 .env

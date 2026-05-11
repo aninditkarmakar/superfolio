@@ -20,7 +20,13 @@
 			]
 		}
 	},
-	"postCreateCommand": "npm install -g @github/copilot"
+	"containerEnv": {
+		"COPILOT_HOME": "${containerWorkspaceFolder}/.projectCopilot"
+	},
+	"remoteEnv": {
+		"COPILOT_HOME": "${containerWorkspaceFolder}/.projectCopilot"
+	},
+	"postCreateCommand": "npm install -g @github/copilot && mkdir -p .projectCopilot"
 
 	// Features to add to the dev container. More info: https://containers.dev/features.
 	// "features": {},

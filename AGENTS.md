@@ -1,5 +1,9 @@
 # Agent Instructions
 
+## Off-Limits Directories
+
+> **`.projectCopilot/`** is reserved exclusively for Copilot CLI agent state and session data. Agents and AI assistants must **never** read, inspect, list, or modify any files inside `.projectCopilot/`. Do not reference, quote, or act on its contents under any circumstances.
+
 ## Project Snapshot
 - This repo is the early scaffold for a consolidated portfolio tracker. Use [README.md](README.md) as the source of truth for the product goal and planned architecture.
 - The intended stack is Python for IBKR Flex XML ingestion, ETL, FX normalization, and Time-Weighted Return math; Next.js/TypeScript for API routes and dashboard UI; Supabase/PostgreSQL for persistence; GitHub Actions and Vercel for automation/hosting.
