@@ -26,7 +26,7 @@
 	"remoteEnv": {
 		"COPILOT_HOME": "${containerWorkspaceFolder}/.projectCopilot"
 	},
-	"postCreateCommand": "npm install -g @github/copilot && mkdir -p .projectCopilot && chmod -R a+rwX .projectCopilot && mkdir -p ~/.copilot/installed-plugins && rm -rf .projectCopilot/installed-plugins && ln -s ~/.copilot/installed-plugins .projectCopilot/installed-plugins"
+	"postCreateCommand": "bash .devcontainer/post-create.sh"
 
 	// Features to add to the dev container. More info: https://containers.dev/features.
 	// "features": {},
