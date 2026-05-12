@@ -350,7 +350,6 @@ BEGIN
     RETURN v_ingestion_run_id;
 END;
 $$;
-$$;
 
 CREATE FUNCTION public.complete_ingestion_run(
     p_ingestion_run_id UUID,
