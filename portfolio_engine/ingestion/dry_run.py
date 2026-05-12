@@ -60,13 +60,64 @@ class FlexDryRunSummary:
         return len(self.daily_nav_records)
 
 
+@dataclass(frozen=True)
+class FlexAnalysisResult:
+    cash_flow_records: tuple[dict[str, Any], ...]
+    daily_nav_records: tuple[dict[str, Any], ...]
+    unsupported_cash_transaction_count: int
+    accounts_seen: tuple[str, ...]
+    currencies_seen: tuple[str, ...]
+    cash_flow_date_range: DateRange | None
+    daily_nav_date_range: DateRange | None
+    duplicate_dedupe_keys: tuple[str, ...]
+
+    @property
+    def cash_flow_count(self) -> int:
+        return len(self.cash_flow_records)
+
+    @property
+    def daily_nav_count(self) -> int:
+        return len(self.daily_nav_records)
+
+    def to_dry_run_summary(self) -> FlexDryRunSummary:
+        safe_cash_records = tuple(
+            _safe_cash_flow_record(record) for record in self.cash_flow_records
+        )
+        safe_nav_records = tuple(
+            _safe_daily_nav_record(record) for record in self.daily_nav_records
+        )
+        return FlexDryRunSummary(
+            cash_flow_records=safe_cash_records,
+            daily_nav_records=safe_nav_records,
+            unsupported_cash_transaction_count=self.unsupported_cash_transaction_count,
+            accounts_seen=self.accounts_seen,
+            currencies_seen=self.currencies_seen,
+            cash_flow_date_range=self.cash_flow_date_range,
+            daily_nav_date_range=self.daily_nav_date_range,
+            duplicate_dedupe_keys=self.duplicate_dedupe_keys,
+        )
+
+
 def analyze_flex_xml_file(
     path: Path,
     *,
     start_date: str | None = None,
     end_date: str | None = None,
 ) -> FlexDryRunSummary:
-    return analyze_flex_xml_text(
+    return analyze_flex_xml_file_for_ingestion(
+        path,
+        start_date=start_date,
+        end_date=end_date,
+    ).to_dry_run_summary()
+
+
+def analyze_flex_xml_file_for_ingestion(
+    path: Path,
+    *,
+    start_date: str | None = None,
+    end_date: str | None = None,
+) -> FlexAnalysisResult:
+    return analyze_flex_xml_text_for_ingestion(
         path.read_text(encoding="utf-8"),
         start_date=start_date,
         end_date=end_date,
@@ -79,12 +130,24 @@ def analyze_flex_xml_text(
     start_date: str | None = None,
     end_date: str | None = None,
 ) -> FlexDryRunSummary:
+    return analyze_flex_xml_text_for_ingestion(
+        xml_text,
+        start_date=start_date,
+        end_date=end_date,
+    ).to_dry_run_summary()
+
+
+def analyze_flex_xml_text_for_ingestion(
+    xml_text: str,
+    *,
+    start_date: str | None = None,
+    end_date: str | None = None,
+) -> FlexAnalysisResult:
     root = ElementTree.fromstring(xml_text)
     cash_flow_records: list[dict[str, Any]] = []
     daily_nav_records: list[dict[str, Any]] = []
     unsupported_cash_transaction_count = 0
 
-    # Single XML walk to process both cash transactions and daily NAV records
     for element in root.iter():
         if element.tag == "CashTransaction":
             raw = dict(element.attrib)
@@ -98,8 +161,7 @@ def analyze_flex_xml_text(
             if not in_date_range(source_report_date, start_date, end_date):
                 continue
 
-            bulk_record = map_cash_transaction_attributes(raw).to_bulk_record()
-            cash_flow_records.append(_safe_cash_flow_record(bulk_record))
+            cash_flow_records.append(map_cash_transaction_attributes(raw).to_bulk_record())
 
         elif element.tag == "EquitySummaryByReportDateInBase":
             raw = dict(element.attrib)
@@ -109,11 +171,10 @@ def analyze_flex_xml_text(
             if not in_date_range(source_report_date, start_date, end_date):
                 continue
 
-            bulk_record = map_daily_nav_attributes(raw).to_bulk_record()
-            daily_nav_records.append(_safe_daily_nav_record(bulk_record))
+            daily_nav_records.append(map_daily_nav_attributes(raw).to_bulk_record())
 
     all_records = cash_flow_records + daily_nav_records
-    return FlexDryRunSummary(
+    return FlexAnalysisResult(
         cash_flow_records=tuple(cash_flow_records),
         daily_nav_records=tuple(daily_nav_records),
         unsupported_cash_transaction_count=unsupported_cash_transaction_count,

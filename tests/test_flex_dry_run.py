@@ -86,6 +86,27 @@ class FlexDryRunTests(unittest.TestCase):
         self.assertEqual(summary.cash_flow_count, 0)
         self.assertEqual(summary.unsupported_cash_transaction_count, 1)
 
+    def test_ingestion_analysis_keeps_full_records_for_load(self) -> None:
+        from portfolio_engine.ingestion.dry_run import analyze_flex_xml_text_for_ingestion
+
+        analysis = analyze_flex_xml_text_for_ingestion(MIXED_XML)
+
+        self.assertEqual(analysis.cash_flow_count, 1)
+        self.assertEqual(analysis.daily_nav_count, 2)
+        self.assertEqual(analysis.cash_flow_records[0]["amount"], "1000.00")
+        self.assertEqual(analysis.cash_flow_records[0]["raw_payload"]["amount"], "1000.00")
+        self.assertEqual(analysis.daily_nav_records[0]["nav_base"], "10000.00")
+        self.assertEqual(analysis.daily_nav_records[0]["raw_payload"]["total"], "10000.00")
+
+    def test_dry_run_summary_stays_sanitized_after_full_analysis_refactor(self) -> None:
+        summary = analyze_flex_xml_text(MIXED_XML)
+
+        self.assertNotIn("amount", summary.cash_flow_records[0])
+        self.assertNotIn("amount_base", summary.cash_flow_records[0])
+        self.assertNotIn("raw_payload", summary.cash_flow_records[0])
+        self.assertNotIn("nav_base", summary.daily_nav_records[0])
+        self.assertNotIn("raw_payload", summary.daily_nav_records[0])
+
 
 if __name__ == "__main__":
     unittest.main()
