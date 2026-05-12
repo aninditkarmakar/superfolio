@@ -157,6 +157,7 @@ Before loading manual Flex XML into the database, inspect a file locally:
 
 ```bash
 python scripts/ingest_flex_file.py dry-run scratch/Flex.xml \
+  --account-external-id U17072019 \
   --start-date 2025-01-01 \
   --end-date 2025-04-30
 ```
@@ -170,11 +171,14 @@ After reviewing a dry run and registering the accounts found in the file, load s
 ```bash
 python scripts/ingest_flex_file.py load scratch/Flex.xml \
   --brokerage-code IBKR \
+  --account-external-id U17072019 \
   --start-date 2025-01-01 \
   --end-date 2025-04-30
 ```
 
 The load command uses `DATABASE_URL` by default. Pass `--database-url` to override it for one run. One load command creates one ingestion run for the whole file, bulk-loads supported cash-flow and daily NAV records, and prints privacy-safe inserted/duplicate/skipped/conflict counts. Duplicate records are treated as idempotent re-ingestion; unknown accounts, inactive accounts, and conflicts mark the ingestion run `partially_succeeded`.
+
+Both dry-run and load are account-scoped. The command only maps supported records whose Flex `accountId` matches `--account-external-id`; supported records for other accounts are counted as skipped warnings and are not written. Load mode also records the selected account on the ingestion run for auditability.
 
 ## 📊 Database Migrations
 
