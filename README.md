@@ -163,6 +163,19 @@ python scripts/ingest_flex_file.py dry-run scratch/Flex.xml \
 
 The dry run scans one Flex XML file for supported records and performs no database writes. A file can contain cash transactions, daily NAV snapshots, or both. Current cash-transaction support is limited to `Deposits/Withdrawals`; other `CashTransaction` types are counted as unsupported and skipped for now.
 
+### Loading a Flex XML file
+
+After reviewing a dry run and registering the accounts found in the file, load supported records into PostgreSQL:
+
+```bash
+python scripts/ingest_flex_file.py load scratch/Flex.xml \
+  --brokerage-code IBKR \
+  --start-date 2025-01-01 \
+  --end-date 2025-04-30
+```
+
+The load command uses `DATABASE_URL` by default. Pass `--database-url` to override it for one run. One load command creates one ingestion run for the whole file, bulk-loads supported cash-flow and daily NAV records, and prints privacy-safe inserted/duplicate/skipped/conflict counts. Duplicate records are treated as idempotent re-ingestion; unknown accounts, inactive accounts, and conflicts mark the ingestion run `partially_succeeded`.
+
 ## 📊 Database Migrations
 
 Database changes are managed with [Sqitch](https://sqitch.org/) against PostgreSQL. Migration scripts live under `migrations/`, with project configuration in [`sqitch.conf`](sqitch.conf).
