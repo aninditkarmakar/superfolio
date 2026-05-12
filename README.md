@@ -136,6 +136,21 @@ DATABASE_URL=postgresql://USER:PASSWORD@HOST/neondb?sslmode=require&channel_bind
 | `GITHUB_EMAIL` | dev container (`post-create.sh`) | Sets `git config --global user.email` inside the container |
 | `DATABASE_URL` | Sqitch migrations | PostgreSQL connection string for `sqitch deploy/verify` |
 
+### Registering an account
+
+Before loading Flex XML records into the database, register each brokerage account once:
+
+```bash
+python scripts/register_account.py \
+  --brokerage-code IBKR \
+  --external-id U100 \
+  --account-type Individual \
+  --base-currency USD \
+  --display-name "Main account"
+```
+
+The command uses `DATABASE_URL` by default. Pass `--database-url` to override it for one run. If a required option is omitted in an interactive terminal, the command prompts for it; in non-interactive use, missing required options fail before any database call.
+
 ## 📊 Database Migrations
 
 Database changes are managed with [Sqitch](https://sqitch.org/) against PostgreSQL. Migration scripts live under `migrations/`, with project configuration in [`sqitch.conf`](sqitch.conf).
