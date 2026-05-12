@@ -80,11 +80,11 @@ def run(
         )
         with adapter_factory(args.database_url) as database:
             account_id = database.register_account(registration)
+        _print_success(account_id, registration, stdout)
     except Exception as error:
         stderr.write(f"Error: {error}\n")
         return 1
 
-    _print_success(account_id, registration, stdout)
     return 0
 
 

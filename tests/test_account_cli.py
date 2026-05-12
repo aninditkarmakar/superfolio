@@ -4,6 +4,7 @@ import io
 import unittest
 
 from portfolio_engine.account_cli import AccountCliError, resolve_registration
+from portfolio_engine.database import AccountRegistration
 
 
 class AccountCliResolutionTests(unittest.TestCase):
@@ -91,9 +92,6 @@ class AccountCliResolutionTests(unittest.TestCase):
                 stdout=io.StringIO(),
                 interactive=False,
             )
-
-
-from portfolio_engine.database import AccountRegistration
 
 
 class FakeDatabase:
