@@ -43,6 +43,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     dry_run = subparsers.add_parser("dry-run", help="Preview supported Flex records without database writes.")
     dry_run.add_argument("file", type=Path, help="Flex XML file to inspect.")
+    dry_run.add_argument("--account-external-id", required=True, help="Brokerage account external ID to preview.")
     dry_run.add_argument("--start-date", type=_parse_iso_date, help="Inclusive reportDate filter start.")
     dry_run.add_argument("--end-date", type=_parse_iso_date, help="Inclusive reportDate filter end.")
 
@@ -71,6 +72,7 @@ def run(
                 args.file,
                 start_date=args.start_date,
                 end_date=args.end_date,
+                account_external_id=args.account_external_id,
             )
             _print_dry_run_summary(args.file, summary, stdout)
             return 0
@@ -255,16 +257,26 @@ def _combined_skipped_accounts(
 
 def _print_dry_run_summary(path: Path, summary: FlexDryRunSummary, stdout: TextIO) -> None:
     stdout.write(f"Dry run: {path}\n")
+    if summary.account_external_id is not None:
+        stdout.write(f"Target account: {summary.account_external_id}\n")
     stdout.write(f"Cash-flow records mapped: {summary.cash_flow_count}\n")
     stdout.write(f"Daily NAV snapshots mapped: {summary.daily_nav_count}\n")
     stdout.write(
         f"Unsupported CashTransaction records skipped: {summary.unsupported_cash_transaction_count}\n"
     )
-    stdout.write(f"Accounts seen: {_format_tuple(summary.accounts_seen)}\n")
+    if summary.account_external_id is None:
+        stdout.write(f"Accounts seen: {_format_tuple(summary.accounts_seen)}\n")
     stdout.write(f"Currencies seen: {_format_tuple(summary.currencies_seen)}\n")
     stdout.write(f"Cash-flow date range: {_format_range(summary.cash_flow_date_range)}\n")
     stdout.write(f"Daily NAV date range: {_format_range(summary.daily_nav_date_range)}\n")
     stdout.write(f"Duplicate dedupe keys: {len(summary.duplicate_dedupe_keys)}\n")
+    if summary.account_external_id is not None:
+        stdout.write(
+            f"Cash-flow records skipped for other accounts: {summary.skipped_other_account_cash_flow_count}\n"
+        )
+        stdout.write(
+            f"Daily NAV snapshots skipped for other accounts: {summary.skipped_other_account_daily_nav_count}\n"
+        )
     stdout.write("No database writes performed.\n")
 
 

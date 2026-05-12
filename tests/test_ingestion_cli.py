@@ -23,7 +23,11 @@ class IngestionCliTests(unittest.TestCase):
             stdout = io.StringIO()
             stderr = io.StringIO()
 
-            exit_code = run(["dry-run", str(path)], stdout=stdout, stderr=stderr)
+            exit_code = run(
+                ["dry-run", str(path), "--account-external-id", "U100"],
+                stdout=stdout,
+                stderr=stderr,
+            )
 
         output = stdout.getvalue()
         self.assertEqual(exit_code, 0)
@@ -31,7 +35,6 @@ class IngestionCliTests(unittest.TestCase):
         self.assertIn("Cash-flow records mapped: 1", output)
         self.assertIn("Daily NAV snapshots mapped: 1", output)
         self.assertIn("Unsupported CashTransaction records skipped: 1", output)
-        self.assertIn("Accounts seen: U100", output)
         self.assertIn("Currencies seen: USD", output)
         self.assertIn("Duplicate dedupe keys: 0", output)
         self.assertIn("No database writes performed.", output)
@@ -46,7 +49,16 @@ class IngestionCliTests(unittest.TestCase):
             stdout = io.StringIO()
 
             exit_code = run(
-                ["dry-run", str(path), "--start-date", "2025-01-03", "--end-date", "2025-01-03"],
+                [
+                    "dry-run",
+                    str(path),
+                    "--account-external-id",
+                    "U100",
+                    "--start-date",
+                    "2025-01-03",
+                    "--end-date",
+                    "2025-01-03",
+                ],
                 stdout=stdout,
                 stderr=io.StringIO(),
             )
@@ -60,7 +72,16 @@ class IngestionCliTests(unittest.TestCase):
         stderr = io.StringIO()
 
         exit_code = run(
-            ["dry-run", "missing.xml", "--start-date", "2025-01-04", "--end-date", "2025-01-03"],
+            [
+                "dry-run",
+                "missing.xml",
+                "--account-external-id",
+                "U100",
+                "--start-date",
+                "2025-01-04",
+                "--end-date",
+                "2025-01-03",
+            ],
             stdout=io.StringIO(),
             stderr=stderr,
         )
@@ -72,7 +93,14 @@ class IngestionCliTests(unittest.TestCase):
         stderr = io.StringIO()
 
         exit_code = run(
-            ["dry-run", "missing.xml", "--start-date", "20250103"],
+            [
+                "dry-run",
+                "missing.xml",
+                "--account-external-id",
+                "U100",
+                "--start-date",
+                "20250103",
+            ],
             stdout=io.StringIO(),
             stderr=stderr,
         )
@@ -83,7 +111,11 @@ class IngestionCliTests(unittest.TestCase):
     def test_dry_run_missing_file_returns_error(self) -> None:
         stderr = io.StringIO()
 
-        exit_code = run(["dry-run", "missing.xml"], stdout=io.StringIO(), stderr=stderr)
+        exit_code = run(
+            ["dry-run", "missing.xml", "--account-external-id", "U100"],
+            stdout=io.StringIO(),
+            stderr=stderr,
+        )
 
         self.assertEqual(exit_code, 1)
         self.assertIn("Error:", stderr.getvalue())
@@ -95,7 +127,11 @@ class IngestionCliTests(unittest.TestCase):
             path.write_text("<FlexQueryResponse>", encoding="utf-8")
             stderr = io.StringIO()
 
-            exit_code = run(["dry-run", str(path)], stdout=io.StringIO(), stderr=stderr)
+            exit_code = run(
+                ["dry-run", str(path), "--account-external-id", "U100"],
+                stdout=io.StringIO(),
+                stderr=stderr,
+            )
 
         self.assertEqual(exit_code, 1)
         self.assertIn("Error:", stderr.getvalue())
@@ -111,12 +147,53 @@ class IngestionCliTests(unittest.TestCase):
             path.write_text(xml_with_dup, encoding="utf-8")
             stdout = io.StringIO()
 
-            exit_code = run(["dry-run", str(path)], stdout=stdout, stderr=io.StringIO())
+            exit_code = run(
+                ["dry-run", str(path), "--account-external-id", "U100"],
+                stdout=stdout,
+                stderr=io.StringIO(),
+            )
 
         output = stdout.getvalue()
         self.assertEqual(exit_code, 0)
         self.assertIn("Duplicate dedupe keys: 1", output)
         self.assertNotIn("99999.99", output)
+
+    def test_dry_run_requires_account_external_id(self) -> None:
+        stderr = io.StringIO()
+
+        exit_code = run(["dry-run", "Flex.xml"], stdout=io.StringIO(), stderr=stderr)
+
+        self.assertEqual(exit_code, 1)
+        self.assertIn("Error:", stderr.getvalue())
+        self.assertIn("account-external-id", stderr.getvalue())
+
+    def test_dry_run_filters_to_target_account_and_reports_skips(self) -> None:
+        mixed_account_xml = """<FlexQueryResponse>
+  <CashTransaction accountId="U100" reportDate="20250102" dateTime="20250102;091500" currency="USD" amount="1000.00" fxRateToBase="1" type="Deposits/Withdrawals" transactionID="CF1" />
+  <CashTransaction accountId="U200" reportDate="20250102" dateTime="20250102;091501" currency="USD" amount="2000.00" fxRateToBase="1" type="Deposits/Withdrawals" transactionID="CF2" />
+  <EquitySummaryByReportDateInBase accountId="U100" reportDate="20250102" currency="USD" total="10000.00" />
+  <EquitySummaryByReportDateInBase accountId="U200" reportDate="20250102" currency="USD" total="20000.00" />
+</FlexQueryResponse>"""
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "Flex.xml"
+            path.write_text(mixed_account_xml, encoding="utf-8")
+            stdout = io.StringIO()
+
+            exit_code = run(
+                ["dry-run", str(path), "--account-external-id", "U100"],
+                stdout=stdout,
+                stderr=io.StringIO(),
+            )
+
+        output = stdout.getvalue()
+        self.assertEqual(exit_code, 0)
+        self.assertIn("Target account: U100", output)
+        self.assertIn("Cash-flow records mapped: 1", output)
+        self.assertIn("Daily NAV snapshots mapped: 1", output)
+        self.assertIn("Cash-flow records skipped for other accounts: 1", output)
+        self.assertIn("Daily NAV snapshots skipped for other accounts: 1", output)
+        self.assertNotIn("2000.00", output)
+        self.assertNotIn("20000.00", output)
 
     def test_script_wrapper_imports_main(self) -> None:
         import scripts.ingest_flex_file as ingest_flex_file_script
