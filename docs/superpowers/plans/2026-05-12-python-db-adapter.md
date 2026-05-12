@@ -25,7 +25,8 @@
 
 - The adapter calls existing PostgreSQL functions only. It does not create tables, write direct `INSERT` statements, or change migrations.
 - `DATABASE_URL` remains the default environment variable for PostgreSQL connections.
-- Real DB use requires installing `requirements.txt`.
+- Real DB use requires installing `requirements.txt` with `python -m pip install -r requirements.txt`.
+- `psycopg[binary]` is Psycopg 3 with its binary extra. It is different from the older `psycopg2-binary` package, whose versions are in the 2.x series.
 - Unit tests use fake connection/cursor objects, not a live PostgreSQL database.
 - The adapter commits after each successful public method call and rolls back before re-raising on failure.
 - Returned UUID values are converted to strings for CLI-friendly output.
@@ -47,7 +48,17 @@ Create `requirements.txt`:
 psycopg[binary]>=3.2,<4
 ```
 
-- [ ] **Step 2: Write failing account adapter tests**
+- [ ] **Step 2: Install Python dependencies**
+
+Run:
+
+```bash
+python -m pip install -r requirements.txt
+```
+
+Expected: `psycopg` installs successfully. This applies the new dependency manifest in the development environment. Unit tests use fake connections and do not require a live database, but `connect_database(...)` and JSONB adaptation require the package for real DB usage.
+
+- [ ] **Step 3: Write failing account adapter tests**
 
 Create `tests/test_database_adapter.py`:
 
@@ -198,7 +209,7 @@ if __name__ == "__main__":
     unittest.main()
 ```
 
-- [ ] **Step 3: Run the account adapter tests to verify they fail**
+- [ ] **Step 4: Run the account adapter tests to verify they fail**
 
 Run:
 
@@ -208,7 +219,7 @@ python -m unittest tests.test_database_adapter -v
 
 Expected: FAIL with `ModuleNotFoundError` or import errors because `portfolio_engine.database` does not exist.
 
-- [ ] **Step 4: Implement the account adapter**
+- [ ] **Step 5: Implement the account adapter**
 
 Create `portfolio_engine/database.py`:
 
@@ -291,7 +302,7 @@ def connect_database(database_url: str | None = None) -> SuperFolioDatabase:
     return SuperFolioDatabase(psycopg.connect(resolved_database_url))
 ```
 
-- [ ] **Step 5: Run the account adapter tests to verify they pass**
+- [ ] **Step 6: Run the account adapter tests to verify they pass**
 
 Run:
 
@@ -301,7 +312,7 @@ python -m unittest tests.test_database_adapter -v
 
 Expected: PASS for the account adapter tests.
 
-- [ ] **Step 6: Commit Task 1**
+- [ ] **Step 7: Commit Task 1**
 
 Run:
 
