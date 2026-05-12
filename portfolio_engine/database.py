@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
+from datetime import date
 from typing import Any, Protocol
 
 
@@ -34,6 +35,15 @@ class AccountRegistration:
     display_name: str | None = None
 
 
+@dataclass(frozen=True)
+class IngestionRunStart:
+    brokerage_code: str
+    source_type: str
+    requested_start_date: date | None = None
+    requested_end_date: date | None = None
+    source_filename: str | None = None
+
+
 class SuperFolioDatabase:
     def __init__(self, connection: ConnectionLike) -> None:
         self._connection = connection
@@ -57,6 +67,28 @@ class SuperFolioDatabase:
                 registration.base_currency,
                 registration.display_name,
             ),
+        )
+        return str(row[0])
+
+    def start_ingestion_run(self, request: IngestionRunStart) -> str:
+        row = self._fetch_one(
+            "SELECT public.start_ingestion_run(%s, %s, %s, %s, %s)",
+            (
+                request.brokerage_code,
+                request.source_type,
+                request.requested_start_date,
+                request.requested_end_date,
+                request.source_filename,
+            ),
+        )
+        return str(row[0])
+
+    def complete_ingestion_run(
+        self, *, ingestion_run_id: str, status: str, error_message: str | None = None
+    ) -> str:
+        row = self._fetch_one(
+            "SELECT public.complete_ingestion_run(%s, %s, %s)",
+            (ingestion_run_id, status, error_message),
         )
         return str(row[0])
 

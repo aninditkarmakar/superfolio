@@ -3,11 +3,13 @@ from __future__ import annotations
 import os
 import unittest
 from dataclasses import FrozenInstanceError
+from datetime import date
 from typing import Any
 
 from portfolio_engine.database import (
     AccountRegistration,
     DatabaseConfigurationError,
+    IngestionRunStart,
     SuperFolioDatabase,
     connect_database,
 )
@@ -115,6 +117,76 @@ class DatabaseAdapterTests(unittest.TestCase):
         self.assertEqual(
             connection.cursor_instance.executed[0][1],
             ("IBKR", "U100", "Individual", "USD", None),
+        )
+
+    def test_start_ingestion_run_calls_database_function(self) -> None:
+        connection = FakeConnection(("run-uuid",))
+        database = SuperFolioDatabase(connection)
+
+        run_id = database.start_ingestion_run(
+            IngestionRunStart(
+                brokerage_code="IBKR",
+                source_type="MANUAL_FILE",
+                requested_start_date=date(2026, 5, 1),
+                requested_end_date=date(2026, 5, 31),
+                source_filename="Cash_Flows.xml",
+            )
+        )
+
+        self.assertEqual(run_id, "run-uuid")
+        self.assertEqual(connection.commit_count, 1)
+        self.assertEqual(
+            connection.cursor_instance.executed,
+            [
+                (
+                    "SELECT public.start_ingestion_run(%s, %s, %s, %s, %s)",
+                    (
+                        "IBKR",
+                        "MANUAL_FILE",
+                        date(2026, 5, 1),
+                        date(2026, 5, 31),
+                        "Cash_Flows.xml",
+                    ),
+                )
+            ],
+        )
+
+    def test_start_ingestion_run_allows_optional_fields(self) -> None:
+        connection = FakeConnection(("run-uuid",))
+        database = SuperFolioDatabase(connection)
+
+        database.start_ingestion_run(
+            IngestionRunStart(
+                brokerage_code="IBKR",
+                source_type="MANUAL_FILE",
+            )
+        )
+
+        self.assertEqual(
+            connection.cursor_instance.executed[0][1],
+            ("IBKR", "MANUAL_FILE", None, None, None),
+        )
+
+    def test_complete_ingestion_run_calls_database_function(self) -> None:
+        connection = FakeConnection(("run-uuid",))
+        database = SuperFolioDatabase(connection)
+
+        run_id = database.complete_ingestion_run(
+            ingestion_run_id="run-uuid",
+            status="partially_succeeded",
+            error_message="Skipped unknown accounts: U404",
+        )
+
+        self.assertEqual(run_id, "run-uuid")
+        self.assertEqual(connection.commit_count, 1)
+        self.assertEqual(
+            connection.cursor_instance.executed,
+            [
+                (
+                    "SELECT public.complete_ingestion_run(%s, %s, %s)",
+                    ("run-uuid", "partially_succeeded", "Skipped unknown accounts: U404"),
+                )
+            ],
         )
 
     def test_register_account_rolls_back_and_reraises_on_failure(self) -> None:
