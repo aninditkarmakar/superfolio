@@ -30,7 +30,8 @@
 - Daily-NAV `external_record_id` uses `NAV:<accountId>:<reportDate>` because daily NAV records do not have a transaction id.
 - Dedupe keys are deterministic strings:
   - Cash flow: `IBKR:<accountId>:CASH_TRANSACTION:<transactionID>` when `transactionID` is present.
-  - Cash flow fallback: `IBKR:<accountId>:CASH_TRANSACTION:<reportDate>:<currency>:<amount>:<description>` when `transactionID` is absent.
+  - Cash flow fallback: `IBKR:<accountId>:CASH_TRANSACTION:<reportDate>:<dateTime>:<currency>:<amount>` when `transactionID` is absent.
+  - Cash flow fallback requires `dateTime` when `transactionID` is absent because it provides the intra-day discriminator.
   - Daily NAV: `IBKR:<accountId>:DAILY_NAV:<reportDate>`.
 - JSON-compatible payload values for dates and decimals are strings, because PostgreSQL bulk functions cast JSON text to `DATE` and `NUMERIC`.
 - This block intentionally does not register accounts, start ingestion runs, call DB functions, or calculate TWR.
@@ -104,6 +105,7 @@ class FlexIngestionMapperTests(unittest.TestCase):
         raw = {
             "accountId": "U100",
             "reportDate": "20260512",
+            "dateTime": "20260512;143000",
             "currency": "USD",
             "amount": "10.00",
             "description": "Deposit",
@@ -111,7 +113,7 @@ class FlexIngestionMapperTests(unittest.TestCase):
 
         self.assertEqual(
             build_cash_transaction_dedupe_key(raw),
-            "IBKR:U100:CASH_TRANSACTION:20260512:USD:10.00:Deposit",
+            "IBKR:U100:CASH_TRANSACTION:20260512:20260512;143000:USD:10.00",
         )
 
     def test_daily_nav_dedupe_key_uses_account_and_report_date(self) -> None:
@@ -262,10 +264,10 @@ def build_cash_transaction_dedupe_key(raw: dict[str, str]) -> str:
     report_date = require_attribute(raw, "reportDate")
     currency = require_attribute(raw, "currency")
     amount = require_attribute(raw, "amount")
-    description = raw.get("description", "")
+    date_time = require_attribute(raw, "dateTime")
     return (
         f"{BROKERAGE_CODE}:{account_id}:CASH_TRANSACTION:"
-        f"{report_date}:{currency}:{amount}:{description}"
+        f"{report_date}:{date_time}:{currency}:{amount}"
     )
 
 

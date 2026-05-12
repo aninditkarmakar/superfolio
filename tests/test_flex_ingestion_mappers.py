@@ -26,6 +26,7 @@ class FlexIngestionMapperTests(unittest.TestCase):
             "accountId": "U100",
             "transactionID": "987654",
             "reportDate": "20260512",
+            "dateTime": "20260512;143000",
             "currency": "USD",
             "amount": "10.00",
             "description": "Deposit",
@@ -40,6 +41,7 @@ class FlexIngestionMapperTests(unittest.TestCase):
         raw = {
             "accountId": "U100",
             "reportDate": "20260512",
+            "dateTime": "20260512;143000",
             "currency": "USD",
             "amount": "10.00",
             "description": "Deposit",
@@ -47,7 +49,7 @@ class FlexIngestionMapperTests(unittest.TestCase):
 
         self.assertEqual(
             build_cash_transaction_dedupe_key(raw),
-            "IBKR:U100:CASH_TRANSACTION:20260512:USD:10.00:Deposit",
+            "IBKR:U100:CASH_TRANSACTION:20260512:20260512;143000:USD:10.00",
         )
 
     def test_daily_nav_dedupe_key_uses_account_and_report_date(self) -> None:
@@ -204,13 +206,13 @@ class FlexIngestionMapperTests(unittest.TestCase):
         self.assertEqual(len(records), 1)
         self.assertEqual(records[0]["external_record_id"], "1")
 
-    def test_map_cash_transactions_allows_missing_optional_transaction_id_and_description(
+    def test_map_cash_transactions_uses_datetime_fallback_without_transaction_id(
         self,
     ) -> None:
         xml = """<?xml version="1.0" encoding="UTF-8"?>
 <FlexQueryResponse>
   <CashTransactions>
-    <CashTransaction accountId="U100" reportDate="20260512"
+    <CashTransaction accountId="U100" reportDate="20260512" dateTime="20260512;143000"
       type="Deposits/Withdrawals" currency="USD" amount="10.00" fxRateToBase="1" />
   </CashTransactions>
 </FlexQueryResponse>
@@ -227,9 +229,28 @@ class FlexIngestionMapperTests(unittest.TestCase):
         self.assertIsNone(records[0]["description"])
         self.assertEqual(
             records[0]["dedupe_key"],
-            "IBKR:U100:CASH_TRANSACTION:20260512:USD:10.00:",
+            "IBKR:U100:CASH_TRANSACTION:20260512:20260512;143000:USD:10.00",
         )
         self.assertEqual(records[0]["flow_date"], "2026-05-12")
+
+    def test_map_cash_transactions_requires_datetime_without_transaction_id(self) -> None:
+        xml = """<?xml version="1.0" encoding="UTF-8"?>
+<FlexQueryResponse>
+  <CashTransactions>
+    <CashTransaction accountId="U100" reportDate="20260512"
+      type="Deposits/Withdrawals" currency="USD" amount="10.00" fxRateToBase="1" />
+  </CashTransactions>
+</FlexQueryResponse>
+"""
+
+        from portfolio_engine.ingestion.flex_mappers import (
+            map_cash_transactions_from_flex_xml_text,
+        )
+
+        with self.assertRaisesRegex(
+            ValueError, "missing required Flex attribute: dateTime"
+        ):
+            map_cash_transactions_from_flex_xml_text(xml)
 
     def test_map_cash_transactions_allows_date_range_filter(self) -> None:
         xml = """<?xml version="1.0" encoding="UTF-8"?>

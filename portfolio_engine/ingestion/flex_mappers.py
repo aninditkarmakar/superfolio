@@ -112,7 +112,9 @@ def build_cash_transaction_dedupe_key(raw: dict[str, Any]) -> str:
     """Build stable dedupe key for cash transaction.
 
     Prefers transactionID if available, otherwise uses fallback
-    of reportDate, currency, amount, and description.
+    of reportDate, dateTime, currency, and amount. dateTime is required
+    when transactionID is absent because it provides the fallback key's
+    intra-day discriminator.
     """
     account_id = require_attribute(raw, "accountId")
 
@@ -121,11 +123,11 @@ def build_cash_transaction_dedupe_key(raw: dict[str, Any]) -> str:
         return f"{BROKERAGE_CODE}:{account_id}:CASH_TRANSACTION:{transaction_id}"
 
     report_date = require_attribute(raw, "reportDate")
+    date_time = require_attribute(raw, "dateTime")
     currency = require_attribute(raw, "currency")
     amount = require_attribute(raw, "amount")
-    description = raw.get("description", "")
 
-    return f"{BROKERAGE_CODE}:{account_id}:CASH_TRANSACTION:{report_date}:{currency}:{amount}:{description}"
+    return f"{BROKERAGE_CODE}:{account_id}:CASH_TRANSACTION:{report_date}:{date_time}:{currency}:{amount}"
 
 
 def build_daily_nav_dedupe_key(raw: dict[str, Any]) -> str:
