@@ -21,6 +21,24 @@ from portfolio_engine.ingestion.flex_mappers import (
 
 DateRange = tuple[str, str]
 
+# Safe keys for privacy: exclude amounts, NAV values, and raw payloads
+_CASH_FLOW_SAFE_KEYS = frozenset(
+    {"account_external_id", "dedupe_key", "source_currency", "flow_date"}
+)
+_DAILY_NAV_SAFE_KEYS = frozenset(
+    {"account_external_id", "dedupe_key", "source_currency", "snapshot_date"}
+)
+
+
+def _safe_cash_flow_record(bulk: dict[str, Any]) -> dict[str, Any]:
+    """Project cash flow record to safe fields only (no amounts or payloads)."""
+    return {k: v for k, v in bulk.items() if k in _CASH_FLOW_SAFE_KEYS}
+
+
+def _safe_daily_nav_record(bulk: dict[str, Any]) -> dict[str, Any]:
+    """Project daily NAV record to safe fields only (no NAV values or payloads)."""
+    return {k: v for k, v in bulk.items() if k in _DAILY_NAV_SAFE_KEYS}
+
 
 @dataclass(frozen=True)
 class FlexDryRunSummary:
@@ -66,25 +84,33 @@ def analyze_flex_xml_text(
     daily_nav_records: list[dict[str, Any]] = []
     unsupported_cash_transaction_count = 0
 
-    for element in root.iter("CashTransaction"):
-        raw = dict(element.attrib)
-        if raw.get("type") != DEFAULT_CASH_FLOW_TYPE:
-            unsupported_cash_transaction_count += 1
-            continue
+    # Single XML walk to process both cash transactions and daily NAV records
+    for element in root.iter():
+        if element.tag == "CashTransaction":
+            raw = dict(element.attrib)
+            if raw.get("type") != DEFAULT_CASH_FLOW_TYPE:
+                unsupported_cash_transaction_count += 1
+                continue
 
-        source_report_date = flex_date_to_payload(require_attribute(raw, "reportDate"))
-        if not in_date_range(source_report_date, start_date, end_date):
-            continue
+            source_report_date = flex_date_to_payload(
+                require_attribute(raw, "reportDate")
+            )
+            if not in_date_range(source_report_date, start_date, end_date):
+                continue
 
-        cash_flow_records.append(map_cash_transaction_attributes(raw).to_bulk_record())
+            bulk_record = map_cash_transaction_attributes(raw).to_bulk_record()
+            cash_flow_records.append(_safe_cash_flow_record(bulk_record))
 
-    for element in root.iter("EquitySummaryByReportDateInBase"):
-        raw = dict(element.attrib)
-        source_report_date = flex_date_to_payload(require_attribute(raw, "reportDate"))
-        if not in_date_range(source_report_date, start_date, end_date):
-            continue
+        elif element.tag == "EquitySummaryByReportDateInBase":
+            raw = dict(element.attrib)
+            source_report_date = flex_date_to_payload(
+                require_attribute(raw, "reportDate")
+            )
+            if not in_date_range(source_report_date, start_date, end_date):
+                continue
 
-        daily_nav_records.append(map_daily_nav_attributes(raw).to_bulk_record())
+            bulk_record = map_daily_nav_attributes(raw).to_bulk_record()
+            daily_nav_records.append(_safe_daily_nav_record(bulk_record))
 
     all_records = cash_flow_records + daily_nav_records
     return FlexDryRunSummary(

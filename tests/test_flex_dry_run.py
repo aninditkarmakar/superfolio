@@ -44,6 +44,8 @@ class FlexDryRunTests(unittest.TestCase):
 
         self.assertEqual(summary.cash_flow_count, 0)
         self.assertEqual(summary.daily_nav_count, 1)
+        self.assertEqual(summary.unsupported_cash_transaction_count, 1)
+        self.assertEqual(summary.currencies_seen, ("CAD",))
         self.assertEqual(summary.accounts_seen, ("U200",))
         self.assertIsNone(summary.cash_flow_date_range)
         self.assertEqual(summary.daily_nav_date_range, ("2025-01-03", "2025-01-03"))
