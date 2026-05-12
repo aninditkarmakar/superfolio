@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
+from datetime import date
 from decimal import Decimal
+from pathlib import Path
 from typing import Any
+from xml.etree import ElementTree
 
-from portfolio_engine.flex_xml import parse_flex_date
+from portfolio_engine.flex_xml import parse_decimal, parse_flex_date
 
 
 BROKERAGE_CODE = "IBKR"
@@ -18,7 +21,7 @@ class FlexCashTransactionPayload:
     """Ingestion payload for a Flex cash transaction record."""
 
     account_external_id: str
-    external_record_id: str
+    external_record_id: str | None
     dedupe_key: str
     source_report_date: str
     source_currency: str
@@ -28,8 +31,8 @@ class FlexCashTransactionPayload:
     currency: str
     amount: str
     amount_base: str
-    fx_rate_to_base: str
-    description: str
+    fx_rate_to_base: str | None
+    description: str | None
 
     def to_bulk_record(self) -> dict[str, Any]:
         """Convert to bulk insert record."""
@@ -131,3 +134,91 @@ def build_daily_nav_dedupe_key(raw: dict[str, Any]) -> str:
     report_date = require_attribute(raw, "reportDate")
 
     return f"{BROKERAGE_CODE}:{account_id}:DAILY_NAV:{report_date}"
+
+
+def map_cash_transaction_attributes(
+    raw: dict[str, str],
+) -> FlexCashTransactionPayload:
+    """Map one Flex CashTransaction attribute dict to an ingestion payload."""
+    account_id = require_attribute(raw, "accountId")
+    report_date = require_attribute(raw, "reportDate")
+    source_currency = require_attribute(raw, "currency").upper()
+    amount = parse_decimal(require_attribute(raw, "amount"), field_name="amount")
+    cash_flow_type = require_attribute(raw, "type")
+
+    raw_fx_rate = optional_blank_to_none(raw.get("fxRateToBase"))
+    if raw_fx_rate is None:
+        fx_rate = Decimal("1")
+        fx_rate_payload = None
+    else:
+        fx_rate = parse_decimal(raw_fx_rate, field_name="fxRateToBase")
+        fx_rate_payload = decimal_to_payload(fx_rate)
+
+    source_report_date = flex_date_to_payload(report_date)
+
+    return FlexCashTransactionPayload(
+        account_external_id=account_id,
+        external_record_id=optional_blank_to_none(raw.get("transactionID")),
+        dedupe_key=build_cash_transaction_dedupe_key(raw),
+        source_report_date=source_report_date,
+        source_currency=source_currency,
+        raw_payload=dict(raw),
+        flow_date=source_report_date,
+        cash_flow_type=cash_flow_type,
+        currency=source_currency,
+        amount=decimal_to_payload(amount),
+        amount_base=decimal_to_payload(amount * fx_rate),
+        fx_rate_to_base=fx_rate_payload,
+        description=optional_blank_to_none(raw.get("description")),
+    )
+
+
+def _date_to_iso(value: date | str | None) -> str | None:
+    if value is None:
+        return None
+    if isinstance(value, date):
+        return value.isoformat()
+    return value
+
+
+def map_cash_transactions_from_flex_xml_text(
+    xml_text: str,
+    *,
+    cash_flow_type: str = DEFAULT_CASH_FLOW_TYPE,
+    start_date: date | str | None = None,
+    end_date: date | str | None = None,
+) -> list[dict[str, Any]]:
+    """Map Flex CashTransaction elements in XML text to DB bulk records."""
+    root = ElementTree.fromstring(xml_text)
+    start_date_iso = _date_to_iso(start_date)
+    end_date_iso = _date_to_iso(end_date)
+    records: list[dict[str, Any]] = []
+
+    for element in root.iter("CashTransaction"):
+        raw = dict(element.attrib)
+        if cash_flow_type and raw.get("type") != cash_flow_type:
+            continue
+
+        source_report_date = flex_date_to_payload(require_attribute(raw, "reportDate"))
+        if not in_date_range(source_report_date, start_date_iso, end_date_iso):
+            continue
+
+        records.append(map_cash_transaction_attributes(raw).to_bulk_record())
+
+    return records
+
+
+def map_cash_transactions_from_flex_xml_file(
+    path: Path,
+    *,
+    cash_flow_type: str = DEFAULT_CASH_FLOW_TYPE,
+    start_date: date | str | None = None,
+    end_date: date | str | None = None,
+) -> list[dict[str, Any]]:
+    """Read a UTF-8 Flex XML file and map CashTransaction records."""
+    return map_cash_transactions_from_flex_xml_text(
+        path.read_text(encoding="utf-8"),
+        cash_flow_type=cash_flow_type,
+        start_date=start_date,
+        end_date=end_date,
+    )

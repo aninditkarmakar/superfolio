@@ -89,6 +89,133 @@ class FlexIngestionMapperTests(unittest.TestCase):
         self.assertEqual(cash_payload.flow_date, "2026-05-12")
         self.assertEqual(nav_payload.nav_base, "1000.00")
 
+    def test_map_cash_transactions_uses_report_date_as_flow_date(self) -> None:
+        xml = """<?xml version="1.0" encoding="UTF-8"?>
+<FlexQueryResponse>
+  <FlexStatements>
+    <FlexStatement accountId="U100" fromDate="20260501" toDate="20260531">
+      <CashTransactions>
+        <CashTransaction accountId="U100" transactionID="987654" reportDate="20260512"
+          dateTime="20260510;120000" settleDate="20260513" availableForTradingDate="20260514"
+          type="Deposits/Withdrawals" currency="CAD" amount="100.00" fxRateToBase="0.730000"
+          description="Synthetic deposit" />
+      </CashTransactions>
+    </FlexStatement>
+  </FlexStatements>
+</FlexQueryResponse>
+"""
+
+        from portfolio_engine.ingestion.flex_mappers import (
+            map_cash_transactions_from_flex_xml_text,
+        )
+
+        records = map_cash_transactions_from_flex_xml_text(xml)
+
+        self.assertEqual(
+            records,
+            [
+                {
+                    "account_external_id": "U100",
+                    "external_record_id": "987654",
+                    "dedupe_key": "IBKR:U100:CASH_TRANSACTION:987654",
+                    "source_report_date": "2026-05-12",
+                    "source_currency": "CAD",
+                    "raw_payload": {
+                        "accountId": "U100",
+                        "transactionID": "987654",
+                        "reportDate": "20260512",
+                        "dateTime": "20260510;120000",
+                        "settleDate": "20260513",
+                        "availableForTradingDate": "20260514",
+                        "type": "Deposits/Withdrawals",
+                        "currency": "CAD",
+                        "amount": "100.00",
+                        "fxRateToBase": "0.730000",
+                        "description": "Synthetic deposit",
+                    },
+                    "flow_date": "2026-05-12",
+                    "cash_flow_type": "Deposits/Withdrawals",
+                    "currency": "CAD",
+                    "amount": "100.00",
+                    "amount_base": "73.00000000",
+                    "fx_rate_to_base": "0.730000",
+                    "description": "Synthetic deposit",
+                }
+            ],
+        )
+
+    def test_map_cash_transactions_filters_to_deposits_withdrawals_by_default(
+        self,
+    ) -> None:
+        xml = """<?xml version="1.0" encoding="UTF-8"?>
+<FlexQueryResponse>
+  <CashTransactions>
+    <CashTransaction accountId="U100" transactionID="1" reportDate="20260512"
+      type="Deposits/Withdrawals" currency="USD" amount="100.00" fxRateToBase="1"
+      description="Synthetic deposit" />
+    <CashTransaction accountId="U100" transactionID="2" reportDate="20260512"
+      type="Dividends" currency="USD" amount="5.00" fxRateToBase="1"
+      description="Synthetic dividend" />
+  </CashTransactions>
+</FlexQueryResponse>
+"""
+
+        from portfolio_engine.ingestion.flex_mappers import (
+            map_cash_transactions_from_flex_xml_text,
+        )
+
+        records = map_cash_transactions_from_flex_xml_text(xml)
+
+        self.assertEqual(len(records), 1)
+        self.assertEqual(records[0]["external_record_id"], "1")
+
+    def test_map_cash_transactions_allows_date_range_filter(self) -> None:
+        xml = """<?xml version="1.0" encoding="UTF-8"?>
+<FlexQueryResponse>
+  <CashTransactions>
+    <CashTransaction accountId="U100" transactionID="1" reportDate="20260501"
+      type="Deposits/Withdrawals" currency="USD" amount="100.00" fxRateToBase="1"
+      description="Before range" />
+    <CashTransaction accountId="U100" transactionID="2" reportDate="20260512"
+      type="Deposits/Withdrawals" currency="USD" amount="200.00" fxRateToBase="1"
+      description="Inside range" />
+  </CashTransactions>
+</FlexQueryResponse>
+"""
+
+        from portfolio_engine.ingestion.flex_mappers import (
+            map_cash_transactions_from_flex_xml_text,
+        )
+
+        records = map_cash_transactions_from_flex_xml_text(
+            xml,
+            start_date=date(2026, 5, 10),
+            end_date=date(2026, 5, 20),
+        )
+
+        self.assertEqual(len(records), 1)
+        self.assertEqual(records[0]["external_record_id"], "2")
+
+    def test_map_cash_transactions_raises_for_missing_report_date(self) -> None:
+        xml = """<?xml version="1.0" encoding="UTF-8"?>
+<FlexQueryResponse>
+  <CashTransactions>
+    <CashTransaction accountId="U100" transactionID="1"
+      type="Deposits/Withdrawals" currency="USD" amount="100.00" fxRateToBase="1"
+      description="Missing date" />
+  </CashTransactions>
+</FlexQueryResponse>
+"""
+
+        from portfolio_engine.ingestion.flex_mappers import (
+            map_cash_transactions_from_flex_xml_text,
+        )
+
+        with self.assertRaisesRegex(
+            ValueError, "missing required Flex attribute: reportDate"
+        ):
+            map_cash_transactions_from_flex_xml_text(xml)
+
 
 if __name__ == "__main__":
     unittest.main()
