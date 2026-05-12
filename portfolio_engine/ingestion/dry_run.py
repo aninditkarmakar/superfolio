@@ -63,7 +63,9 @@ class FlexDryRunSummary:
         return len(self.daily_nav_records)
 
 
-# NOTE: Fields mirror FlexDryRunSummary and AccountScopedFlexAnalysisResult exactly. Keep all three in sync when adding fields.
+# NOTE: Public fields mirror FlexDryRunSummary and AccountScopedFlexAnalysisResult exactly.
+# Private fields (starting with _) are internal only and not exposed in summaries.
+# Keep public fields in sync when adding new public fields.
 @dataclass(frozen=True)
 class FlexAnalysisResult:
     cash_flow_records: tuple[dict[str, Any], ...]
@@ -77,6 +79,7 @@ class FlexAnalysisResult:
     account_external_id: str | None = None
     skipped_other_account_cash_flow_count: int = 0
     skipped_other_account_daily_nav_count: int = 0
+    _unsupported_cash_transaction_account_ids: tuple[str, ...] = ()
 
     @property
     def cash_flow_count(self) -> int:
@@ -118,11 +121,16 @@ class FlexAnalysisResult:
             if str(record["account_external_id"]) == target
         )
         all_records = list(cash_flow_records + daily_nav_records)
+        # Count unsupported cash transactions for this account only
+        unsupported_count = sum(
+            1 for account_id in self._unsupported_cash_transaction_account_ids
+            if account_id == target
+        )
         return AccountScopedFlexAnalysisResult(
             account_external_id=target,
             cash_flow_records=cash_flow_records,
             daily_nav_records=daily_nav_records,
-            unsupported_cash_transaction_count=self.unsupported_cash_transaction_count,
+            unsupported_cash_transaction_count=unsupported_count,
             accounts_seen=(target,) if (cash_flow_records or daily_nav_records) else (),
             currencies_seen=_sorted_unique(record["source_currency"] for record in all_records),
             cash_flow_date_range=_record_date_range(list(cash_flow_records), "flow_date"),
@@ -228,6 +236,7 @@ def analyze_flex_xml_text_for_ingestion(
     cash_flow_records: list[dict[str, Any]] = []
     daily_nav_records: list[dict[str, Any]] = []
     unsupported_cash_transaction_count = 0
+    unsupported_account_ids: list[str] = []
 
     # Single XML walk to process both cash transactions and daily NAV records
     for element in root.iter():
@@ -235,6 +244,7 @@ def analyze_flex_xml_text_for_ingestion(
             raw = dict(element.attrib)
             if raw.get("type") != DEFAULT_CASH_FLOW_TYPE:
                 unsupported_cash_transaction_count += 1
+                unsupported_account_ids.append(raw.get("accountId", ""))
                 continue
 
             source_report_date = flex_date_to_payload(
@@ -265,6 +275,7 @@ def analyze_flex_xml_text_for_ingestion(
         cash_flow_date_range=_record_date_range(cash_flow_records, "flow_date"),
         daily_nav_date_range=_record_date_range(daily_nav_records, "snapshot_date"),
         duplicate_dedupe_keys=_duplicate_dedupe_keys(all_records),
+        _unsupported_cash_transaction_account_ids=tuple(unsupported_account_ids),
     )
 
 
