@@ -182,6 +182,15 @@ WHERE n.nspname = 'public'
       'bulk_ingest_daily_nav_snapshots'
   );
 
+SELECT 1 / (
+    count(*) = 1
+    AND bool_or(pg_get_function_identity_arguments(p.oid) = 'text, text, text, date, date, text')
+)::int
+FROM pg_proc p
+JOIN pg_namespace n ON n.oid = p.pronamespace
+WHERE n.nspname = 'public'
+  AND p.proname = 'start_ingestion_run';
+
 SELECT 1 / (count(*) = 2)::int
 FROM pg_proc p
 JOIN pg_namespace n ON n.oid = p.pronamespace
