@@ -89,6 +89,41 @@ class FlexIngestionMapperTests(unittest.TestCase):
         self.assertEqual(cash_payload.flow_date, "2026-05-12")
         self.assertEqual(nav_payload.nav_base, "1000.00")
 
+    def test_payload_dataclasses_are_frozen(self) -> None:
+        from dataclasses import FrozenInstanceError
+
+        cash_payload = FlexCashTransactionPayload(
+            account_external_id="U100",
+            external_record_id="987654",
+            dedupe_key="IBKR:U100:CASH_TRANSACTION:987654",
+            source_report_date="2026-05-12",
+            source_currency="USD",
+            raw_payload={"accountId": "U100"},
+            flow_date="2026-05-12",
+            cash_flow_type="Deposits/Withdrawals",
+            currency="USD",
+            amount="10.00",
+            amount_base="13.5000",
+            fx_rate_to_base="1.3500",
+            description="Deposit",
+        )
+        nav_payload = FlexDailyNavPayload(
+            account_external_id="U100",
+            external_record_id="NAV:U100:20260512",
+            dedupe_key="IBKR:U100:DAILY_NAV:20260512",
+            source_report_date="2026-05-12",
+            source_currency="USD",
+            raw_payload={"accountId": "U100"},
+            snapshot_date="2026-05-12",
+            base_currency="USD",
+            nav_base="1000.00",
+        )
+
+        with self.assertRaises(FrozenInstanceError):
+            cash_payload.flow_date = "2026-05-13"
+        with self.assertRaises(FrozenInstanceError):
+            nav_payload.nav_base = "2000.00"
+
     def test_map_cash_transactions_uses_report_date_as_flow_date(self) -> None:
         xml = """<?xml version="1.0" encoding="UTF-8"?>
 <FlexQueryResponse>

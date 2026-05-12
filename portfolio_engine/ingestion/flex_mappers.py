@@ -16,7 +16,7 @@ BROKERAGE_CODE = "IBKR"
 DEFAULT_CASH_FLOW_TYPE = "Deposits/Withdrawals"
 
 
-@dataclass
+@dataclass(frozen=True)
 class FlexCashTransactionPayload:
     """Ingestion payload for a Flex cash transaction record."""
 
@@ -39,7 +39,7 @@ class FlexCashTransactionPayload:
         return asdict(self)
 
 
-@dataclass
+@dataclass(frozen=True)
 class FlexDailyNavPayload:
     """Ingestion payload for a Flex daily NAV (EquitySummaryByReportDateInBase) record."""
 
