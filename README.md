@@ -151,6 +151,18 @@ python scripts/register_account.py \
 
 The command uses `DATABASE_URL` by default. Pass `--database-url` to override it for one run. If a required option is omitted in an interactive terminal, the command prompts for it; in non-interactive use, missing required options fail before any database call.
 
+### Dry-running a Flex XML file
+
+Before loading manual Flex XML into the database, inspect a file locally:
+
+```bash
+python scripts/ingest_flex_file.py dry-run scratch/Flex.xml \
+  --start-date 2025-01-01 \
+  --end-date 2025-04-30
+```
+
+The dry run scans one Flex XML file for supported records and performs no database writes. A file can contain cash transactions, daily NAV snapshots, or both. Current cash-transaction support is limited to `Deposits/Withdrawals`; other `CashTransaction` types are counted as unsupported and skipped for now.
+
 ## 📊 Database Migrations
 
 Database changes are managed with [Sqitch](https://sqitch.org/) against PostgreSQL. Migration scripts live under `migrations/`, with project configuration in [`sqitch.conf`](sqitch.conf).

@@ -100,6 +100,11 @@ class IngestionCliTests(unittest.TestCase):
         self.assertEqual(exit_code, 1)
         self.assertIn("Error:", stderr.getvalue())
 
+    def test_script_wrapper_imports_main(self) -> None:
+        import scripts.ingest_flex_file as ingest_flex_file_script
+
+        self.assertEqual(ingest_flex_file_script.main.__module__, "portfolio_engine.ingestion_cli")
+
 
 if __name__ == "__main__":
     unittest.main()
