@@ -66,6 +66,9 @@ class FlexDryRunSummary:
 # NOTE: Public fields mirror FlexDryRunSummary and AccountScopedFlexAnalysisResult exactly.
 # Private fields (starting with _) are internal only and not exposed in summaries.
 # Keep public fields in sync when adding new public fields.
+#
+# Do not serialize FlexAnalysisResult with dataclasses.asdict(); it contains
+# internal fields used only to derive account-scoped safe summaries.
 @dataclass(frozen=True)
 class FlexAnalysisResult:
     cash_flow_records: tuple[dict[str, Any], ...]
