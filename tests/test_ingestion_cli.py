@@ -40,6 +40,7 @@ class IngestionCliTests(unittest.TestCase):
         self.assertIn("No database writes performed.", output)
         self.assertNotIn("1000.00", output)
         self.assertNotIn("10000.00", output)   # NAV total must also be suppressed
+        self.assertNotIn("Accounts seen:", output)
         self.assertEqual(stderr.getvalue(), "")
 
     def test_dry_run_date_filter_limits_output(self) -> None:
@@ -161,7 +162,8 @@ class IngestionCliTests(unittest.TestCase):
     def test_dry_run_requires_account_external_id(self) -> None:
         stderr = io.StringIO()
 
-        exit_code = run(["dry-run", "Flex.xml"], stdout=io.StringIO(), stderr=stderr)
+        # argparse should reject the missing account flag before file I/O.
+        exit_code = run(["dry-run", "nonexistent_Flex.xml"], stdout=io.StringIO(), stderr=stderr)
 
         self.assertEqual(exit_code, 1)
         self.assertIn("Error:", stderr.getvalue())
@@ -192,8 +194,11 @@ class IngestionCliTests(unittest.TestCase):
         self.assertIn("Daily NAV snapshots mapped: 1", output)
         self.assertIn("Cash-flow records skipped for other accounts: 1", output)
         self.assertIn("Daily NAV snapshots skipped for other accounts: 1", output)
+        self.assertNotIn("1000.00", output)
+        self.assertNotIn("10000.00", output)
         self.assertNotIn("2000.00", output)
         self.assertNotIn("20000.00", output)
+        self.assertNotIn("Accounts seen:", output)
 
     def test_script_wrapper_imports_main(self) -> None:
         import scripts.ingest_flex_file as ingest_flex_file_script
