@@ -184,7 +184,7 @@ WHERE n.nspname = 'public'
 
 SELECT 1 / (
     count(*) = 1
-    AND bool_or(pg_get_function_identity_arguments(p.oid) = 'text, text, text, date, date, text')
+    AND to_regprocedure('public.start_ingestion_run(text,text,text,date,date,text)') IS NOT NULL
 )::int
 FROM pg_proc p
 JOIN pg_namespace n ON n.oid = p.pronamespace

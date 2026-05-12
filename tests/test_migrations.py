@@ -42,9 +42,9 @@ class MigrationContractTests(unittest.TestCase):
         sql = VERIFY_SCHEMA.read_text(encoding="utf-8")
 
         self.assertIn("p.proname = 'start_ingestion_run'", sql)
-        self.assertIn("pg_get_function_identity_arguments(p.oid)", sql)
+        self.assertIn("to_regprocedure", sql)
         self.assertIn(
-            "'text, text, text, date, date, text'",
+            "'public.start_ingestion_run(text,text,text,date,date,text)'",
             sql,
         )
 
