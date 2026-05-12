@@ -17,7 +17,6 @@ from portfolio_engine.database import (
 )
 from portfolio_engine.ingestion.dry_run import (
     AccountScopedFlexAnalysisResult,
-    FlexAnalysisResult,
     FlexDryRunSummary,
     analyze_flex_xml_file,
     analyze_flex_xml_file_for_ingestion,
