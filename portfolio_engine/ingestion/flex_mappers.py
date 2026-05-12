@@ -123,7 +123,7 @@ def build_cash_transaction_dedupe_key(raw: dict[str, Any]) -> str:
     report_date = require_attribute(raw, "reportDate")
     currency = require_attribute(raw, "currency")
     amount = require_attribute(raw, "amount")
-    description = require_attribute(raw, "description")
+    description = raw.get("description", "")
 
     return f"{BROKERAGE_CODE}:{account_id}:CASH_TRANSACTION:{report_date}:{currency}:{amount}:{description}"
 

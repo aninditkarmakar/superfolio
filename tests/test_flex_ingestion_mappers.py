@@ -169,6 +169,33 @@ class FlexIngestionMapperTests(unittest.TestCase):
         self.assertEqual(len(records), 1)
         self.assertEqual(records[0]["external_record_id"], "1")
 
+    def test_map_cash_transactions_allows_missing_optional_transaction_id_and_description(
+        self,
+    ) -> None:
+        xml = """<?xml version="1.0" encoding="UTF-8"?>
+<FlexQueryResponse>
+  <CashTransactions>
+    <CashTransaction accountId="U100" reportDate="20260512"
+      type="Deposits/Withdrawals" currency="USD" amount="10.00" fxRateToBase="1" />
+  </CashTransactions>
+</FlexQueryResponse>
+"""
+
+        from portfolio_engine.ingestion.flex_mappers import (
+            map_cash_transactions_from_flex_xml_text,
+        )
+
+        records = map_cash_transactions_from_flex_xml_text(xml)
+
+        self.assertEqual(len(records), 1)
+        self.assertIsNone(records[0]["external_record_id"])
+        self.assertIsNone(records[0]["description"])
+        self.assertEqual(
+            records[0]["dedupe_key"],
+            "IBKR:U100:CASH_TRANSACTION:20260512:USD:10.00:",
+        )
+        self.assertEqual(records[0]["flow_date"], "2026-05-12")
+
     def test_map_cash_transactions_allows_date_range_filter(self) -> None:
         xml = """<?xml version="1.0" encoding="UTF-8"?>
 <FlexQueryResponse>
