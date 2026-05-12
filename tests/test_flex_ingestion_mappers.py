@@ -358,6 +358,48 @@ class FlexIngestionMapperTests(unittest.TestCase):
         ):
             map_cash_transactions_from_flex_xml_text(xml)
 
+    def test_scratch_cash_flow_file_shape_when_available(self) -> None:
+        from pathlib import Path
+
+        from portfolio_engine.ingestion.flex_mappers import (
+            map_cash_transactions_from_flex_xml_file,
+        )
+
+        sample_path = Path("scratch/Cash_Flows.xml")
+        if not sample_path.exists():
+            self.skipTest("scratch/Cash_Flows.xml is not available")
+
+        records = map_cash_transactions_from_flex_xml_file(sample_path)
+
+        self.assertGreater(len(records), 0)
+        first = records[0]
+        self.assertIn("account_external_id", first)
+        self.assertIn("dedupe_key", first)
+        self.assertIn("flow_date", first)
+        self.assertIn("amount_base", first)
+        self.assertIn("raw_payload", first)
+
+    def test_scratch_daily_nav_file_shape_when_available(self) -> None:
+        from pathlib import Path
+
+        from portfolio_engine.ingestion.flex_mappers import (
+            map_daily_nav_snapshots_from_flex_xml_file,
+        )
+
+        sample_path = Path("scratch/Daily_NAV.xml")
+        if not sample_path.exists():
+            self.skipTest("scratch/Daily_NAV.xml is not available")
+
+        records = map_daily_nav_snapshots_from_flex_xml_file(sample_path)
+
+        self.assertGreater(len(records), 0)
+        first = records[0]
+        self.assertIn("account_external_id", first)
+        self.assertIn("dedupe_key", first)
+        self.assertIn("snapshot_date", first)
+        self.assertIn("nav_base", first)
+        self.assertIn("raw_payload", first)
+
 
 if __name__ == "__main__":
     unittest.main()
