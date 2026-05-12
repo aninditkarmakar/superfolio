@@ -112,9 +112,10 @@ This project uses **VS Code Dev Containers** for a reproducible local setup.
 ### `.devcontainer/devcontainer.json`
 * **Base Image:** `mcr.microsoft.com/devcontainers/typescript-node:4-24-trixie` (Node.js/TypeScript host, extended via `.devcontainer/Dockerfile`)
 * **Python Feature:** `ghcr.io/devcontainers/features/python:1` — Python 3.12 with pip and JupyterLab
-* **Database Client:** `postgresql-client` — includes `psql` for testing PostgreSQL/Neon connections
+* **Database Tools:** `postgresql-client`, `sqitch`, and `libdbd-pg-perl` are installed by `.devcontainer/Dockerfile` for PostgreSQL/Sqitch workflows.
+* **Python Dependencies:** `.devcontainer/post-create.sh` installs `requirements.txt`, currently `psycopg[binary]` for database-backed CLI workflows.
 
-No third-party Python packages are required by the current engine — it uses only the standard library (`xml.etree`, `csv`, `dataclasses`, `decimal`, `pathlib`).
+The core TWR engine uses only the Python standard library. Database-backed commands additionally require the committed `requirements.txt` dependencies.
 
 ### `.env` — local configuration
 
@@ -194,9 +195,9 @@ migrations/
   sqitch.plan
 ```
 
-### Install Sqitch locally
+### Sqitch availability
 
-Sqitch is not yet installed by the dev container. Install it in the current environment before running migrations:
+The devcontainer installs Sqitch and its PostgreSQL driver automatically. In a non-devcontainer environment, install the same packages before running migrations:
 
 ```bash
 sudo apt-get update

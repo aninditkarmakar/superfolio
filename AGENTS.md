@@ -15,15 +15,15 @@
 - [tests/](tests/) contains the current Python test suite.
 - [migrations/](migrations/) and [sqitch.conf](sqitch.conf) define PostgreSQL schema changes managed by Sqitch. See [docs/er-diagram.md](docs/er-diagram.md) and [docs/database-functions.md](docs/database-functions.md) for database design and function contracts.
 - [requirements.txt](requirements.txt) currently declares the PostgreSQL adapter dependency (`psycopg[binary]`).
-- [.devcontainer/devcontainer.json](.devcontainer/devcontainer.json) defines the current dev container: TypeScript/Node base image extended by [.devcontainer/Dockerfile](.devcontainer/Dockerfile), with a Python 3.12 feature and `postgresql-client`.
+- [.devcontainer/devcontainer.json](.devcontainer/devcontainer.json) defines the current dev container: TypeScript/Node base image extended by [.devcontainer/Dockerfile](.devcontainer/Dockerfile), with a Python 3.12 feature, `postgresql-client`, `sqitch`, and `libdbd-pg-perl`.
 - [scratch/](scratch/) is ignored by Git and contains local IBKR Flex XML samples such as cash-flow and daily-NAV reports. Treat this directory as private/local data: do not commit it, do not paste raw account data into docs, and prefer synthetic fixtures for tests.
 - [.gitignore](.gitignore) currently ignores everything under `scratch/`.
 
 ## Commands And Tooling
 - There is no `package.json` or frontend app yet; do not invent npm build, lint, or dev commands.
-- Install Python database dependencies with `python -m pip install -r requirements.txt` when database-backed code needs to run.
-- Run Python tests with `python -m pytest` when `pytest` is available in the environment. There is no committed Python dev-dependency manifest yet, so do not assume a fresh environment already has pytest.
-- For database migrations, use Sqitch only after it is installed and `DATABASE_URL`/`SQITCH_TARGET` are configured as described in [README.md](README.md). Do not print database connection strings.
+- Devcontainer rebuilds install Python dependencies from `requirements.txt` via `.devcontainer/post-create.sh`. Outside the devcontainer, run `python -m pip install -r requirements.txt` before database-backed workflows.
+- Run Python tests with `python -m unittest discover -s tests -v`. The current test suite uses `unittest`; do not add or require pytest unless the repo adopts it explicitly.
+- The devcontainer image installs `sqitch`, `libdbd-pg-perl`, and `postgresql-client`. For database migrations, configure `DATABASE_URL`/`SQITCH_TARGET` as described in [README.md](README.md). Do not print database connection strings.
 
 ## Data And Finance Conventions
 - Parse Flex XML with a structured XML parser, not ad hoc string splitting. Preserve IBKR identifiers and report dates during ingestion so repeated imports can be idempotent.
