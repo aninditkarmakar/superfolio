@@ -3,7 +3,13 @@ from __future__ import annotations
 import unittest
 from xml.etree import ElementTree
 
-from portfolio_engine.ingestion.dry_run import analyze_flex_xml_text
+from portfolio_engine.ingestion.dry_run import (
+    analyze_flex_xml_file_for_ingestion,
+    analyze_flex_xml_text,
+    analyze_flex_xml_text_for_ingestion,
+    FlexAnalysisResult,
+    FlexDryRunSummary,
+)
 
 
 MIXED_XML = """<FlexQueryResponse>
@@ -87,8 +93,6 @@ class FlexDryRunTests(unittest.TestCase):
         self.assertEqual(summary.unsupported_cash_transaction_count, 1)
 
     def test_ingestion_analysis_keeps_full_records_for_load(self) -> None:
-        from portfolio_engine.ingestion.dry_run import analyze_flex_xml_text_for_ingestion
-
         analysis = analyze_flex_xml_text_for_ingestion(MIXED_XML)
 
         self.assertEqual(analysis.cash_flow_count, 1)
@@ -106,6 +110,31 @@ class FlexDryRunTests(unittest.TestCase):
         self.assertNotIn("raw_payload", summary.cash_flow_records[0])
         self.assertNotIn("nav_base", summary.daily_nav_records[0])
         self.assertNotIn("raw_payload", summary.daily_nav_records[0])
+
+    def test_analysis_result_and_dry_run_summary_have_same_fields(self) -> None:
+        import dataclasses
+
+        result_fields = {f.name for f in dataclasses.fields(FlexAnalysisResult)}
+        summary_fields = {f.name for f in dataclasses.fields(FlexDryRunSummary)}
+        self.assertEqual(result_fields, summary_fields)
+
+    def test_analyze_flex_xml_file_for_ingestion_reads_file(self) -> None:
+        import tempfile
+        from pathlib import Path
+
+        with tempfile.NamedTemporaryFile(
+            suffix=".xml", mode="w", encoding="utf-8", delete=False
+        ) as f:
+            f.write(MIXED_XML)
+            tmp_path = Path(f.name)
+
+        try:
+            analysis = analyze_flex_xml_file_for_ingestion(tmp_path)
+            self.assertEqual(analysis.cash_flow_count, 1)
+            self.assertEqual(analysis.daily_nav_count, 2)
+            self.assertEqual(analysis.cash_flow_records[0]["amount"], "1000.00")
+        finally:
+            tmp_path.unlink(missing_ok=True)
 
 
 if __name__ == "__main__":

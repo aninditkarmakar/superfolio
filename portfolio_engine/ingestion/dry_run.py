@@ -60,6 +60,7 @@ class FlexDryRunSummary:
         return len(self.daily_nav_records)
 
 
+# NOTE: Fields mirror FlexDryRunSummary exactly. Keep both in sync when adding fields.
 @dataclass(frozen=True)
 class FlexAnalysisResult:
     cash_flow_records: tuple[dict[str, Any], ...]
@@ -148,6 +149,7 @@ def analyze_flex_xml_text_for_ingestion(
     daily_nav_records: list[dict[str, Any]] = []
     unsupported_cash_transaction_count = 0
 
+    # Single XML walk to process both cash transactions and daily NAV records
     for element in root.iter():
         if element.tag == "CashTransaction":
             raw = dict(element.attrib)
