@@ -215,6 +215,11 @@ class AccountCliRunTests(unittest.TestCase):
         self.assertEqual(exit_code, 1)
         self.assertIn("Error: unknown brokerage code", stderr.getvalue())
 
+    def test_script_wrapper_imports_main(self) -> None:
+        import scripts.register_account as register_account_script
+
+        self.assertEqual(register_account_script.main.__module__, "portfolio_engine.account_cli")
+
 
 if __name__ == "__main__":
     unittest.main()
