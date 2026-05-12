@@ -159,6 +159,10 @@ class DatabaseAdapterTests(unittest.TestCase):
             if original is not None:
                 os.environ["DATABASE_URL"] = original
 
+    def test_connect_database_rejects_blank_database_url(self) -> None:
+        with self.assertRaisesRegex(DatabaseConfigurationError, "DATABASE_URL"):
+            connect_database("   ")
+
 
 if __name__ == "__main__":
     unittest.main()

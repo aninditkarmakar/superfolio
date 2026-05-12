@@ -75,12 +75,12 @@ class SuperFolioDatabase:
 
 
 def connect_database(database_url: str | None = None) -> SuperFolioDatabase:
-    resolved_database_url = database_url or os.environ.get("DATABASE_URL")
-    if not resolved_database_url:
+    resolved_database_url = database_url if database_url is not None else os.environ.get("DATABASE_URL")
+    if resolved_database_url is None or not resolved_database_url.strip():
         raise DatabaseConfigurationError(
             "DATABASE_URL is required. Set DATABASE_URL or pass database_url."
         )
 
     import psycopg
 
-    return SuperFolioDatabase(psycopg.connect(resolved_database_url))
+    return SuperFolioDatabase(psycopg.connect(resolved_database_url.strip()))
