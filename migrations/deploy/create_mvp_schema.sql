@@ -282,8 +282,6 @@ BEGIN
 END;
 $$;
 
-DROP FUNCTION IF EXISTS public.start_ingestion_run(TEXT, TEXT, DATE, DATE, TEXT);
-
 CREATE FUNCTION public.start_ingestion_run(
     p_brokerage_code TEXT,
     p_account_external_id TEXT,
