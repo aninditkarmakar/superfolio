@@ -258,6 +258,86 @@ class FlexIngestionMapperTests(unittest.TestCase):
         self.assertEqual(len(records), 1)
         self.assertEqual(records[0]["external_record_id"], "2")
 
+    def test_map_daily_nav_snapshots_maps_total_to_nav_base(self) -> None:
+        xml = """<?xml version="1.0" encoding="UTF-8"?>
+<FlexQueryResponse>
+  <FlexStatements>
+    <FlexStatement accountId="U100" fromDate="20260501" toDate="20260531">
+      <EquitySummaryInBase>
+        <EquitySummaryByReportDateInBase accountId="U100" reportDate="20260512"
+          currency="USD" total="12345.6700" cash="100.00" stock="12245.67" />
+      </EquitySummaryInBase>
+    </FlexStatement>
+  </FlexStatements>
+</FlexQueryResponse>
+"""
+
+        from portfolio_engine.ingestion.flex_mappers import map_daily_nav_snapshots_from_flex_xml_text
+
+        records = map_daily_nav_snapshots_from_flex_xml_text(xml)
+
+        self.assertEqual(
+            records,
+            [
+                {
+                    "account_external_id": "U100",
+                    "external_record_id": "NAV:U100:20260512",
+                    "dedupe_key": "IBKR:U100:DAILY_NAV:20260512",
+                    "source_report_date": "2026-05-12",
+                    "source_currency": "USD",
+                    "raw_payload": {
+                        "accountId": "U100",
+                        "reportDate": "20260512",
+                        "currency": "USD",
+                        "total": "12345.6700",
+                        "cash": "100.00",
+                        "stock": "12245.67",
+                    },
+                    "snapshot_date": "2026-05-12",
+                    "base_currency": "USD",
+                    "nav_base": "12345.6700",
+                }
+            ],
+        )
+
+    def test_map_daily_nav_snapshots_allows_date_range_filter(self) -> None:
+        xml = """<?xml version="1.0" encoding="UTF-8"?>
+<FlexQueryResponse>
+  <EquitySummaryInBase>
+    <EquitySummaryByReportDateInBase accountId="U100" reportDate="20260501"
+      currency="USD" total="100.00" />
+    <EquitySummaryByReportDateInBase accountId="U100" reportDate="20260512"
+      currency="USD" total="200.00" />
+  </EquitySummaryInBase>
+</FlexQueryResponse>
+"""
+
+        from portfolio_engine.ingestion.flex_mappers import map_daily_nav_snapshots_from_flex_xml_text
+
+        records = map_daily_nav_snapshots_from_flex_xml_text(
+            xml,
+            start_date=date(2026, 5, 10),
+            end_date=date(2026, 5, 20),
+        )
+
+        self.assertEqual(len(records), 1)
+        self.assertEqual(records[0]["snapshot_date"], "2026-05-12")
+
+    def test_map_daily_nav_snapshots_raises_for_missing_total(self) -> None:
+        xml = """<?xml version="1.0" encoding="UTF-8"?>
+<FlexQueryResponse>
+  <EquitySummaryInBase>
+    <EquitySummaryByReportDateInBase accountId="U100" reportDate="20260512"
+      currency="USD" />
+  </EquitySummaryInBase>
+</FlexQueryResponse>
+"""
+
+        from portfolio_engine.ingestion.flex_mappers import map_daily_nav_snapshots_from_flex_xml_text
+
+        with self.assertRaisesRegex(ValueError, "missing required Flex attribute: total"):
+            map_daily_nav_snapshots_from_flex_xml_text(xml)
+
     def test_map_cash_transactions_raises_for_missing_report_date(self) -> None:
         xml = """<?xml version="1.0" encoding="UTF-8"?>
 <FlexQueryResponse>

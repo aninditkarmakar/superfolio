@@ -173,6 +173,27 @@ def map_cash_transaction_attributes(
     )
 
 
+def map_daily_nav_attributes(raw: dict[str, str]) -> FlexDailyNavPayload:
+    """Map one Flex daily NAV attribute dict to an ingestion payload."""
+    account_id = require_attribute(raw, "accountId")
+    report_date = require_attribute(raw, "reportDate")
+    currency = require_attribute(raw, "currency").upper()
+    total = parse_decimal(require_attribute(raw, "total"), field_name="total")
+    source_report_date = flex_date_to_payload(report_date)
+
+    return FlexDailyNavPayload(
+        account_external_id=account_id,
+        external_record_id=f"NAV:{account_id}:{report_date}",
+        dedupe_key=build_daily_nav_dedupe_key(raw),
+        source_report_date=source_report_date,
+        source_currency=currency,
+        raw_payload=dict(raw),
+        snapshot_date=source_report_date,
+        base_currency=currency,
+        nav_base=decimal_to_payload(total),
+    )
+
+
 def _date_to_iso(value: date | str | None) -> str | None:
     if value is None:
         return None
@@ -219,6 +240,43 @@ def map_cash_transactions_from_flex_xml_file(
     return map_cash_transactions_from_flex_xml_text(
         path.read_text(encoding="utf-8"),
         cash_flow_type=cash_flow_type,
+        start_date=start_date,
+        end_date=end_date,
+    )
+
+
+def map_daily_nav_snapshots_from_flex_xml_text(
+    xml_text: str,
+    *,
+    start_date: date | str | None = None,
+    end_date: date | str | None = None,
+) -> list[dict[str, Any]]:
+    """Map Flex daily NAV snapshot elements in XML text to DB bulk records."""
+    root = ElementTree.fromstring(xml_text)
+    start_date_iso = _date_to_iso(start_date)
+    end_date_iso = _date_to_iso(end_date)
+    records: list[dict[str, Any]] = []
+
+    for element in root.iter("EquitySummaryByReportDateInBase"):
+        raw = dict(element.attrib)
+        source_report_date = flex_date_to_payload(require_attribute(raw, "reportDate"))
+        if not in_date_range(source_report_date, start_date_iso, end_date_iso):
+            continue
+
+        records.append(map_daily_nav_attributes(raw).to_bulk_record())
+
+    return records
+
+
+def map_daily_nav_snapshots_from_flex_xml_file(
+    path: Path,
+    *,
+    start_date: date | str | None = None,
+    end_date: date | str | None = None,
+) -> list[dict[str, Any]]:
+    """Read a UTF-8 Flex XML file and map daily NAV snapshot records."""
+    return map_daily_nav_snapshots_from_flex_xml_text(
+        path.read_text(encoding="utf-8"),
         start_date=start_date,
         end_date=end_date,
     )
