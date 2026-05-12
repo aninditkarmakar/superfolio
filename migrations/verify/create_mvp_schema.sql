@@ -382,6 +382,7 @@ WITH account_created AS (
 run_started AS (
     SELECT public.start_ingestion_run(
         'IBKR',
+        'U200',
         'MANUAL_FILE',
         DATE '2026-03-01',
         DATE '2026-03-31',
@@ -483,6 +484,7 @@ WITH account_created AS (
 run_started AS (
     SELECT public.start_ingestion_run(
         'IBKR',
+        'U300',
         'MANUAL_FILE',
         DATE '2026-04-01',
         DATE '2026-04-30',
@@ -550,6 +552,7 @@ WITH account_created AS (
 run_started AS (
     SELECT public.start_ingestion_run(
         'IBKR',
+        'U400',
         'MANUAL_FILE',
         DATE '2026-05-01',
         DATE '2026-05-31',
