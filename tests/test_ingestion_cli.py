@@ -36,6 +36,7 @@ class IngestionCliTests(unittest.TestCase):
         self.assertIn("Duplicate dedupe keys: 0", output)
         self.assertIn("No database writes performed.", output)
         self.assertNotIn("1000.00", output)
+        self.assertNotIn("10000.00", output)   # NAV total must also be suppressed
         self.assertEqual(stderr.getvalue(), "")
 
     def test_dry_run_date_filter_limits_output(self) -> None:

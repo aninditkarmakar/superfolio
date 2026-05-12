@@ -6,7 +6,7 @@ import argparse
 import sys
 from datetime import datetime
 from pathlib import Path
-from typing import TextIO
+from typing import NoReturn, TextIO
 
 from portfolio_engine.ingestion.dry_run import FlexDryRunSummary, analyze_flex_xml_file
 
@@ -16,7 +16,7 @@ class IngestionCliError(RuntimeError):
 
 
 class _ArgumentParser(argparse.ArgumentParser):
-    def error(self, message: str) -> None:
+    def error(self, message: str) -> NoReturn:
         raise IngestionCliError(message)
 
 
@@ -52,9 +52,6 @@ def run(
     except Exception as error:
         stderr.write(f"Error: {error}\n")
         return 1
-
-    stderr.write("Error: unsupported command\n")
-    return 1
 
 
 def main(argv: list[str] | None = None) -> int:
