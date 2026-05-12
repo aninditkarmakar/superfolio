@@ -74,6 +74,18 @@ class DatabaseAdapterTests(unittest.TestCase):
         with self.assertRaises(FrozenInstanceError):
             registration.external_id = "U200"
 
+    def test_ingestion_run_start_is_immutable(self) -> None:
+        request = IngestionRunStart(
+            brokerage_code="IBKR",
+            source_type="MANUAL_FILE",
+            requested_start_date=date(2026, 5, 1),
+            requested_end_date=date(2026, 5, 31),
+            source_filename="Cash_Flows.xml",
+        )
+
+        with self.assertRaises(FrozenInstanceError):
+            request.source_filename = "Daily_NAV.xml"
+
     def test_register_account_calls_database_function_and_commits(self) -> None:
         connection = FakeConnection(("account-uuid",))
         database = SuperFolioDatabase(connection)
@@ -135,6 +147,7 @@ class DatabaseAdapterTests(unittest.TestCase):
 
         self.assertEqual(run_id, "run-uuid")
         self.assertEqual(connection.commit_count, 1)
+        self.assertEqual(connection.rollback_count, 0)
         self.assertEqual(
             connection.cursor_instance.executed,
             [
@@ -167,6 +180,21 @@ class DatabaseAdapterTests(unittest.TestCase):
             ("IBKR", "MANUAL_FILE", None, None, None),
         )
 
+    def test_start_ingestion_run_rolls_back_and_reraises_on_failure(self) -> None:
+        connection = FailingConnection()
+        database = SuperFolioDatabase(connection)
+
+        with self.assertRaisesRegex(RuntimeError, "database unavailable"):
+            database.start_ingestion_run(
+                IngestionRunStart(
+                    brokerage_code="IBKR",
+                    source_type="MANUAL_FILE",
+                )
+            )
+
+        self.assertEqual(connection.commit_count, 0)
+        self.assertEqual(connection.rollback_count, 1)
+
     def test_complete_ingestion_run_calls_database_function(self) -> None:
         connection = FakeConnection(("run-uuid",))
         database = SuperFolioDatabase(connection)
@@ -179,6 +207,7 @@ class DatabaseAdapterTests(unittest.TestCase):
 
         self.assertEqual(run_id, "run-uuid")
         self.assertEqual(connection.commit_count, 1)
+        self.assertEqual(connection.rollback_count, 0)
         self.assertEqual(
             connection.cursor_instance.executed,
             [
@@ -188,6 +217,34 @@ class DatabaseAdapterTests(unittest.TestCase):
                 )
             ],
         )
+
+    def test_complete_ingestion_run_allows_optional_error_message(self) -> None:
+        connection = FakeConnection(("run-uuid",))
+        database = SuperFolioDatabase(connection)
+
+        database.complete_ingestion_run(
+            ingestion_run_id="run-uuid",
+            status="succeeded",
+        )
+
+        self.assertEqual(
+            connection.cursor_instance.executed[0][1],
+            ("run-uuid", "succeeded", None),
+        )
+
+    def test_complete_ingestion_run_rolls_back_and_reraises_on_failure(self) -> None:
+        connection = FailingConnection()
+        database = SuperFolioDatabase(connection)
+
+        with self.assertRaisesRegex(RuntimeError, "database unavailable"):
+            database.complete_ingestion_run(
+                ingestion_run_id="run-uuid",
+                status="failed",
+                error_message="database unavailable",
+            )
+
+        self.assertEqual(connection.commit_count, 0)
+        self.assertEqual(connection.rollback_count, 1)
 
     def test_register_account_rolls_back_and_reraises_on_failure(self) -> None:
         connection = FailingConnection()
