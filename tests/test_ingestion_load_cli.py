@@ -167,3 +167,150 @@ class IngestionLoadCliTests(unittest.TestCase):
         self.assertIn("Final status: succeeded", output)
         self.assertNotIn("1000.00", output)
         self.assertNotIn("10000.00", output)
+
+    def test_load_skips_empty_categories_without_bulk_calls(self) -> None:
+        nav_only_xml = """<FlexQueryResponse>
+  <EquitySummaryByReportDateInBase accountId="U100" reportDate="20250102" currency="USD" total="10000.00" />
+</FlexQueryResponse>"""
+        database = FakeDatabase()
+        connector = Connector(database)
+        directory, path = self.write_xml(nav_only_xml)
+        self.addCleanup(directory.cleanup)
+
+        exit_code = run(
+            ["load", str(path), "--brokerage-code", "IBKR"],
+            stdout=io.StringIO(),
+            stderr=io.StringIO(),
+            database_connector=connector,
+        )
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(database.cash_records, [])
+        self.assertEqual(len(database.nav_records), 1)
+
+    def test_load_marks_unknown_inactive_or_conflict_results_partially_succeeded(self) -> None:
+        database = FakeDatabase()
+        database.cash_summary = summary(unknown=1, skipped_accounts=["U404"])
+        database.nav_summary = summary(conflicts=1)
+        connector = Connector(database)
+        directory, path = self.write_xml()
+        self.addCleanup(directory.cleanup)
+        stdout = io.StringIO()
+
+        exit_code = run(
+            ["load", str(path), "--brokerage-code", "IBKR"],
+            stdout=stdout,
+            stderr=io.StringIO(),
+            database_connector=connector,
+        )
+
+        output = stdout.getvalue()
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(
+            database.completed,
+            [("run-123", "partially_succeeded", "skipped accounts or conflicts require review")],
+        )
+        self.assertIn("Skipped accounts: U404", output)
+        self.assertIn("Final status: partially_succeeded", output)
+        self.assertIn("Message: skipped accounts or conflicts require review", output)
+
+    def test_load_duplicate_only_results_are_succeeded(self) -> None:
+        database = FakeDatabase()
+        database.cash_summary = summary(duplicate=1)
+        database.nav_summary = summary(duplicate=1)
+        connector = Connector(database)
+        directory, path = self.write_xml()
+        self.addCleanup(directory.cleanup)
+
+        exit_code = run(
+            ["load", str(path), "--brokerage-code", "IBKR"],
+            stdout=io.StringIO(),
+            stderr=io.StringIO(),
+            database_connector=connector,
+        )
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(database.completed, [("run-123", "succeeded", None)])
+
+    def test_load_failure_after_run_start_marks_run_failed(self) -> None:
+        class FailingBulkDatabase(FakeDatabase):
+            def bulk_ingest_cash_flows(
+                self, ingestion_run_id: str, records: list[dict[str, Any]]
+            ) -> BulkIngestionSummary:
+                raise RuntimeError("bulk cash failed")
+
+        database = FailingBulkDatabase()
+        connector = Connector(database)
+        directory, path = self.write_xml()
+        self.addCleanup(directory.cleanup)
+        stderr = io.StringIO()
+
+        exit_code = run(
+            ["load", str(path), "--brokerage-code", "IBKR"],
+            stdout=io.StringIO(),
+            stderr=stderr,
+            database_connector=connector,
+        )
+
+        self.assertEqual(exit_code, 1)
+        self.assertIn("Error: bulk cash failed", stderr.getvalue())
+        self.assertEqual(database.completed, [("run-123", "failed", "bulk cash failed")])
+
+    def test_load_reports_failed_finalization_error_too(self) -> None:
+        class FailingFinalizeDatabase(FakeDatabase):
+            def bulk_ingest_cash_flows(
+                self, ingestion_run_id: str, records: list[dict[str, Any]]
+            ) -> BulkIngestionSummary:
+                raise RuntimeError("bulk cash failed")
+
+            def complete_ingestion_run(
+                self,
+                *,
+                ingestion_run_id: str,
+                status: str,
+                error_message: str | None = None,
+            ) -> str:
+                raise RuntimeError("completion failed")
+
+        database = FailingFinalizeDatabase()
+        connector = Connector(database)
+        directory, path = self.write_xml()
+        self.addCleanup(directory.cleanup)
+        stderr = io.StringIO()
+
+        exit_code = run(
+            ["load", str(path), "--brokerage-code", "IBKR"],
+            stdout=io.StringIO(),
+            stderr=stderr,
+            database_connector=connector,
+        )
+
+        self.assertEqual(exit_code, 1)
+        self.assertIn("bulk cash failed", stderr.getvalue())
+        self.assertIn("failed to mark ingestion run failed: completion failed", stderr.getvalue())
+
+    def test_load_output_never_prints_fallback_dedupe_key_amount_or_raw_payload(self) -> None:
+        xml = """<FlexQueryResponse>
+  <CashTransaction accountId="U100" reportDate="20250102" dateTime="20250102;091500" currency="USD" amount="99999.99" fxRateToBase="1" type="Deposits/Withdrawals" />
+  <CashTransaction accountId="U100" reportDate="20250102" dateTime="20250102;091500" currency="USD" amount="99999.99" fxRateToBase="1" type="Deposits/Withdrawals" />
+  <EquitySummaryByReportDateInBase accountId="U100" reportDate="20250102" currency="USD" total="88888.88" />
+</FlexQueryResponse>"""
+        database = FakeDatabase()
+        connector = Connector(database)
+        directory, path = self.write_xml(xml)
+        self.addCleanup(directory.cleanup)
+        stdout = io.StringIO()
+
+        exit_code = run(
+            ["load", str(path), "--brokerage-code", "IBKR"],
+            stdout=stdout,
+            stderr=io.StringIO(),
+            database_connector=connector,
+        )
+
+        output = stdout.getvalue()
+        self.assertEqual(exit_code, 0)
+        self.assertNotIn("99999.99", output)
+        self.assertNotIn("88888.88", output)
+        self.assertNotIn("raw_payload", output)
+        self.assertNotIn("dedupe_key", output)

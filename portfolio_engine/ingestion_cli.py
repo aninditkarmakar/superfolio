@@ -111,33 +111,40 @@ def _load_flex_file(
         end_date=args.end_date,
     )
     with database_connector(args.database_url) as database:
-        ingestion_run_id = database.start_ingestion_run(
-            IngestionRunStart(
-                brokerage_code=args.brokerage_code,
-                source_type=SOURCE_TYPE_MANUAL_FILE,
-                requested_start_date=_date_or_none(args.start_date),
-                requested_end_date=_date_or_none(args.end_date),
-                source_filename=args.file.name,
+        ingestion_run_id: str | None = None
+        try:
+            ingestion_run_id = database.start_ingestion_run(
+                IngestionRunStart(
+                    brokerage_code=args.brokerage_code,
+                    source_type=SOURCE_TYPE_MANUAL_FILE,
+                    requested_start_date=_date_or_none(args.start_date),
+                    requested_end_date=_date_or_none(args.end_date),
+                    source_filename=args.file.name,
+                )
             )
-        )
-        cash_summary = _empty_bulk_summary()
-        nav_summary = _empty_bulk_summary()
-        if analysis.cash_flow_records:
-            cash_summary = database.bulk_ingest_cash_flows(
-                ingestion_run_id,
-                list(analysis.cash_flow_records),
+            cash_summary = _empty_bulk_summary()
+            nav_summary = _empty_bulk_summary()
+            if analysis.cash_flow_records:
+                cash_summary = database.bulk_ingest_cash_flows(
+                    ingestion_run_id,
+                    list(analysis.cash_flow_records),
+                )
+            if analysis.daily_nav_records:
+                nav_summary = database.bulk_ingest_daily_nav_snapshots(
+                    ingestion_run_id,
+                    list(analysis.daily_nav_records),
+                )
+            final_status, message = _derive_final_status(cash_summary, nav_summary)
+            database.complete_ingestion_run(
+                ingestion_run_id=ingestion_run_id,
+                status=final_status,
+                error_message=message,
             )
-        if analysis.daily_nav_records:
-            nav_summary = database.bulk_ingest_daily_nav_snapshots(
-                ingestion_run_id,
-                list(analysis.daily_nav_records),
-            )
-        final_status, message = _derive_final_status(cash_summary, nav_summary)
-        database.complete_ingestion_run(
-            ingestion_run_id=ingestion_run_id,
-            status=final_status,
-            error_message=message,
-        )
+        except Exception as error:
+            if ingestion_run_id is not None:
+                _mark_run_failed(database, ingestion_run_id, error)
+            raise
+
         _print_load_summary(
             args.file,
             ingestion_run_id,
@@ -148,6 +155,23 @@ def _load_flex_file(
             message,
             stdout,
         )
+
+
+def _mark_run_failed(
+    database: SuperFolioDatabase,
+    ingestion_run_id: str,
+    error: Exception,
+) -> None:
+    try:
+        database.complete_ingestion_run(
+            ingestion_run_id=ingestion_run_id,
+            status="failed",
+            error_message=str(error),
+        )
+    except Exception as finalization_error:
+        raise IngestionCliError(
+            f"{error}; additionally failed to mark ingestion run failed: {finalization_error}"
+        ) from finalization_error
 
 
 def _date_or_none(value: str | None) -> date | None:
