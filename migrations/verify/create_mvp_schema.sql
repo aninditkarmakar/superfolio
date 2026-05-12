@@ -199,6 +199,14 @@ DECLARE
     v_error_message TEXT;
     v_completed_at TIMESTAMPTZ;
 BEGIN
+    PERFORM public.register_account(
+        'IBKR',
+        'U100',
+        'INDIVIDUAL',
+        'USD',
+        'Synthetic Account'
+    );
+
     v_ingestion_run_id := public.start_ingestion_run(
         'IBKR',
         'U100',
@@ -274,6 +282,25 @@ BEGIN
 EXCEPTION
     WHEN OTHERS THEN
         IF SQLERRM = 'Expected start_ingestion_run to reject an unknown account' THEN
+            RAISE;
+        END IF;
+END;
+$$;
+
+DO $$
+BEGIN
+    PERFORM public.start_ingestion_run(
+        'IBKR',
+        '',
+        'MANUAL_FILE',
+        NULL,
+        NULL,
+        'blank-account.xml'
+    );
+    RAISE EXCEPTION 'Expected start_ingestion_run to reject a blank account_external_id';
+EXCEPTION
+    WHEN OTHERS THEN
+        IF SQLERRM = 'Expected start_ingestion_run to reject a blank account_external_id' THEN
             RAISE;
         END IF;
 END;
