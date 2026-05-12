@@ -44,6 +44,17 @@ class IngestionRunStart:
     source_filename: str | None = None
 
 
+@dataclass(frozen=True)
+class BulkIngestionSummary:
+    inserted_count: int
+    duplicate_count: int
+    skipped_unknown_account_count: int
+    skipped_inactive_account_count: int
+    conflict_count: int
+    skipped_accounts: list[str]
+    record_results: list[dict[str, Any]]
+
+
 class SuperFolioDatabase:
     def __init__(self, connection: ConnectionLike) -> None:
         self._connection = connection
@@ -92,6 +103,24 @@ class SuperFolioDatabase:
         )
         return str(row[0])
 
+    def bulk_ingest_cash_flows(
+        self, ingestion_run_id: str, records: list[dict[str, Any]]
+    ) -> BulkIngestionSummary:
+        row = self._fetch_one(
+            "SELECT * FROM public.bulk_ingest_cash_flows(%s, %s)",
+            (ingestion_run_id, _jsonb(records)),
+        )
+        return _bulk_summary_from_row(row)
+
+    def bulk_ingest_daily_nav_snapshots(
+        self, ingestion_run_id: str, records: list[dict[str, Any]]
+    ) -> BulkIngestionSummary:
+        row = self._fetch_one(
+            "SELECT * FROM public.bulk_ingest_daily_nav_snapshots(%s, %s)",
+            (ingestion_run_id, _jsonb(records)),
+        )
+        return _bulk_summary_from_row(row)
+
     def _fetch_one(self, sql: str, params: tuple[Any, ...]) -> tuple[Any, ...]:
         try:
             with self._connection.cursor() as cursor:
@@ -104,6 +133,27 @@ class SuperFolioDatabase:
         except Exception:
             self._connection.rollback()
             raise
+
+
+def _jsonb(value: Any) -> Any:
+    try:
+        from psycopg.types.json import Jsonb
+    except ImportError:
+        return value
+
+    return Jsonb(value)
+
+
+def _bulk_summary_from_row(row: tuple[Any, ...]) -> BulkIngestionSummary:
+    return BulkIngestionSummary(
+        inserted_count=int(row[0]),
+        duplicate_count=int(row[1]),
+        skipped_unknown_account_count=int(row[2]),
+        skipped_inactive_account_count=int(row[3]),
+        conflict_count=int(row[4]),
+        skipped_accounts=list(row[5] or []),
+        record_results=list(row[6] or []),
+    )
 
 
 def connect_database(database_url: str | None = None) -> SuperFolioDatabase:

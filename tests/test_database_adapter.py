@@ -8,6 +8,7 @@ from typing import Any
 
 from portfolio_engine.database import (
     AccountRegistration,
+    BulkIngestionSummary,
     DatabaseConfigurationError,
     IngestionRunStart,
     SuperFolioDatabase,
@@ -245,6 +246,75 @@ class DatabaseAdapterTests(unittest.TestCase):
 
         self.assertEqual(connection.commit_count, 0)
         self.assertEqual(connection.rollback_count, 1)
+
+    def test_bulk_ingest_cash_flows_returns_summary(self) -> None:
+        row = (
+            2,
+            1,
+            1,
+            0,
+            0,
+            ["U404"],
+            [{"account_external_id": "U404", "record_status": "skipped_unknown_account"}],
+        )
+        connection = FakeConnection(row)
+        database = SuperFolioDatabase(connection)
+        records = [{"account_external_id": "U100", "dedupe_key": "cash-1"}]
+
+        summary = database.bulk_ingest_cash_flows("run-uuid", records)
+
+        self.assertEqual(
+            summary,
+            BulkIngestionSummary(
+                inserted_count=2,
+                duplicate_count=1,
+                skipped_unknown_account_count=1,
+                skipped_inactive_account_count=0,
+                conflict_count=0,
+                skipped_accounts=["U404"],
+                record_results=[
+                    {
+                        "account_external_id": "U404",
+                        "record_status": "skipped_unknown_account",
+                    }
+                ],
+            ),
+        )
+        self.assertEqual(connection.commit_count, 1)
+        self.assertEqual(connection.rollback_count, 0)
+        self.assertEqual(
+            connection.cursor_instance.executed[0][0],
+            "SELECT * FROM public.bulk_ingest_cash_flows(%s, %s)",
+        )
+        self.assertEqual(connection.cursor_instance.executed[0][1][0], "run-uuid")
+
+    def test_bulk_ingest_daily_nav_snapshots_returns_summary(self) -> None:
+        row = (1, 0, 0, 0, 1, [], [{"record_status": "conflict_existing_snapshot"}])
+        connection = FakeConnection(row)
+        database = SuperFolioDatabase(connection)
+        records = [{"account_external_id": "U100", "dedupe_key": "nav-1"}]
+
+        summary = database.bulk_ingest_daily_nav_snapshots("run-uuid", records)
+
+        self.assertEqual(summary.inserted_count, 1)
+        self.assertEqual(summary.conflict_count, 1)
+        self.assertEqual(summary.record_results, [{"record_status": "conflict_existing_snapshot"}])
+        self.assertEqual(connection.commit_count, 1)
+        self.assertEqual(connection.rollback_count, 0)
+        self.assertEqual(
+            connection.cursor_instance.executed[0][0],
+            "SELECT * FROM public.bulk_ingest_daily_nav_snapshots(%s, %s)",
+        )
+        self.assertEqual(connection.cursor_instance.executed[0][1][0], "run-uuid")
+
+    def test_bulk_summary_converts_null_collections_to_empty_lists(self) -> None:
+        connection = FakeConnection((0, 0, 0, 0, 0, None, None))
+        database = SuperFolioDatabase(connection)
+
+        summary = database.bulk_ingest_cash_flows("run-uuid", [])
+
+        self.assertEqual(summary.skipped_accounts, [])
+        self.assertEqual(summary.record_results, [])
 
     def test_register_account_rolls_back_and_reraises_on_failure(self) -> None:
         connection = FailingConnection()
