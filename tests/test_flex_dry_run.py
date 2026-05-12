@@ -27,6 +27,13 @@ MIXED_XML = """<FlexQueryResponse>
   </FlexStatements>
 </FlexQueryResponse>"""
 
+MIXED_ACCOUNT_XML = """<FlexQueryResponse>
+  <CashTransaction accountId="U100" reportDate="20250102" dateTime="20250102;091500" currency="USD" amount="1000.00" fxRateToBase="1" type="Deposits/Withdrawals" transactionID="CF1" />
+  <CashTransaction accountId="U200" reportDate="20250102" dateTime="20250102;091501" currency="USD" amount="2000.00" fxRateToBase="1" type="Deposits/Withdrawals" transactionID="CF2" />
+  <EquitySummaryByReportDateInBase accountId="U100" reportDate="20250102" currency="USD" total="10000.00" />
+  <EquitySummaryByReportDateInBase accountId="U200" reportDate="20250102" currency="USD" total="20000.00" />
+</FlexQueryResponse>"""
+
 
 class FlexDryRunTests(unittest.TestCase):
     def test_mixed_xml_maps_supported_cash_and_nav_records(self) -> None:
@@ -135,6 +142,35 @@ class FlexDryRunTests(unittest.TestCase):
             self.assertEqual(analysis.cash_flow_records[0]["amount"], "1000.00")
         finally:
             tmp_path.unlink(missing_ok=True)
+
+    def test_analysis_filters_to_target_account(self) -> None:
+        analysis = analyze_flex_xml_text_for_ingestion(MIXED_ACCOUNT_XML)
+
+        scoped = analysis.for_account("U100")
+
+        self.assertEqual(scoped.account_external_id, "U100")
+        self.assertEqual(scoped.cash_flow_count, 1)
+        self.assertEqual(scoped.daily_nav_count, 1)
+        self.assertEqual(scoped.cash_flow_records[0]["account_external_id"], "U100")
+        self.assertEqual(scoped.daily_nav_records[0]["account_external_id"], "U100")
+        self.assertEqual(scoped.skipped_other_account_cash_flow_count, 1)
+        self.assertEqual(scoped.skipped_other_account_daily_nav_count, 1)
+
+    def test_account_scoped_dry_run_summary_is_sanitized(self) -> None:
+        summary = analyze_flex_xml_text(
+            MIXED_ACCOUNT_XML,
+            account_external_id="U100",
+        )
+
+        self.assertEqual(summary.account_external_id, "U100")
+        self.assertEqual(summary.cash_flow_count, 1)
+        self.assertEqual(summary.daily_nav_count, 1)
+        self.assertEqual(summary.skipped_other_account_cash_flow_count, 1)
+        self.assertEqual(summary.skipped_other_account_daily_nav_count, 1)
+        self.assertNotIn("amount", summary.cash_flow_records[0])
+        self.assertNotIn("nav_base", summary.daily_nav_records[0])
+        self.assertNotIn("2000.00", str(summary.cash_flow_records))
+        self.assertNotIn("20000.00", str(summary.daily_nav_records))
 
 
 if __name__ == "__main__":

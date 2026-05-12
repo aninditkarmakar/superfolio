@@ -50,6 +50,9 @@ class FlexDryRunSummary:
     cash_flow_date_range: DateRange | None
     daily_nav_date_range: DateRange | None
     duplicate_dedupe_keys: tuple[str, ...]
+    account_external_id: str | None = None
+    skipped_other_account_cash_flow_count: int = 0
+    skipped_other_account_daily_nav_count: int = 0
 
     @property
     def cash_flow_count(self) -> int:
@@ -71,6 +74,9 @@ class FlexAnalysisResult:
     cash_flow_date_range: DateRange | None
     daily_nav_date_range: DateRange | None
     duplicate_dedupe_keys: tuple[str, ...]
+    account_external_id: str | None = None
+    skipped_other_account_cash_flow_count: int = 0
+    skipped_other_account_daily_nav_count: int = 0
 
     @property
     def cash_flow_count(self) -> int:
@@ -96,6 +102,72 @@ class FlexAnalysisResult:
             cash_flow_date_range=self.cash_flow_date_range,
             daily_nav_date_range=self.daily_nav_date_range,
             duplicate_dedupe_keys=self.duplicate_dedupe_keys,
+            account_external_id=self.account_external_id,
+            skipped_other_account_cash_flow_count=self.skipped_other_account_cash_flow_count,
+            skipped_other_account_daily_nav_count=self.skipped_other_account_daily_nav_count,
+        )
+
+    def for_account(self, account_external_id: str) -> AccountScopedFlexAnalysisResult:
+        target = account_external_id.strip()
+        cash_flow_records = tuple(
+            record for record in self.cash_flow_records
+            if str(record["account_external_id"]) == target
+        )
+        daily_nav_records = tuple(
+            record for record in self.daily_nav_records
+            if str(record["account_external_id"]) == target
+        )
+        all_records = list(cash_flow_records + daily_nav_records)
+        return AccountScopedFlexAnalysisResult(
+            account_external_id=target,
+            cash_flow_records=cash_flow_records,
+            daily_nav_records=daily_nav_records,
+            unsupported_cash_transaction_count=self.unsupported_cash_transaction_count,
+            accounts_seen=(target,) if target else (),
+            currencies_seen=_sorted_unique(record["source_currency"] for record in all_records),
+            cash_flow_date_range=_record_date_range(list(cash_flow_records), "flow_date"),
+            daily_nav_date_range=_record_date_range(list(daily_nav_records), "snapshot_date"),
+            duplicate_dedupe_keys=_duplicate_dedupe_keys(all_records),
+            skipped_other_account_cash_flow_count=len(self.cash_flow_records) - len(cash_flow_records),
+            skipped_other_account_daily_nav_count=len(self.daily_nav_records) - len(daily_nav_records),
+        )
+
+
+@dataclass(frozen=True)
+class AccountScopedFlexAnalysisResult:
+    account_external_id: str
+    cash_flow_records: tuple[dict[str, Any], ...]
+    daily_nav_records: tuple[dict[str, Any], ...]
+    unsupported_cash_transaction_count: int
+    accounts_seen: tuple[str, ...]
+    currencies_seen: tuple[str, ...]
+    cash_flow_date_range: DateRange | None
+    daily_nav_date_range: DateRange | None
+    duplicate_dedupe_keys: tuple[str, ...]
+    skipped_other_account_cash_flow_count: int
+    skipped_other_account_daily_nav_count: int
+
+    @property
+    def cash_flow_count(self) -> int:
+        return len(self.cash_flow_records)
+
+    @property
+    def daily_nav_count(self) -> int:
+        return len(self.daily_nav_records)
+
+    def to_dry_run_summary(self) -> FlexDryRunSummary:
+        return FlexDryRunSummary(
+            cash_flow_records=tuple(_safe_cash_flow_record(record) for record in self.cash_flow_records),
+            daily_nav_records=tuple(_safe_daily_nav_record(record) for record in self.daily_nav_records),
+            unsupported_cash_transaction_count=self.unsupported_cash_transaction_count,
+            accounts_seen=self.accounts_seen,
+            currencies_seen=self.currencies_seen,
+            cash_flow_date_range=self.cash_flow_date_range,
+            daily_nav_date_range=self.daily_nav_date_range,
+            duplicate_dedupe_keys=self.duplicate_dedupe_keys,
+            account_external_id=self.account_external_id,
+            skipped_other_account_cash_flow_count=self.skipped_other_account_cash_flow_count,
+            skipped_other_account_daily_nav_count=self.skipped_other_account_daily_nav_count,
         )
 
 
@@ -104,12 +176,16 @@ def analyze_flex_xml_file(
     *,
     start_date: str | None = None,
     end_date: str | None = None,
+    account_external_id: str | None = None,
 ) -> FlexDryRunSummary:
-    return analyze_flex_xml_file_for_ingestion(
+    result = analyze_flex_xml_file_for_ingestion(
         path,
         start_date=start_date,
         end_date=end_date,
-    ).to_dry_run_summary()
+    )
+    if account_external_id is not None:
+        return result.for_account(account_external_id).to_dry_run_summary()
+    return result.to_dry_run_summary()
 
 
 def analyze_flex_xml_file_for_ingestion(
@@ -130,12 +206,16 @@ def analyze_flex_xml_text(
     *,
     start_date: str | None = None,
     end_date: str | None = None,
+    account_external_id: str | None = None,
 ) -> FlexDryRunSummary:
-    return analyze_flex_xml_text_for_ingestion(
+    result = analyze_flex_xml_text_for_ingestion(
         xml_text,
         start_date=start_date,
         end_date=end_date,
-    ).to_dry_run_summary()
+    )
+    if account_external_id is not None:
+        return result.for_account(account_external_id).to_dry_run_summary()
+    return result.to_dry_run_summary()
 
 
 def analyze_flex_xml_text_for_ingestion(
