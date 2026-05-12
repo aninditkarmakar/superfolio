@@ -82,8 +82,6 @@ def _print_dry_run_summary(path: Path, summary: FlexDryRunSummary, stdout: TextI
     stdout.write(f"Cash-flow date range: {_format_range(summary.cash_flow_date_range)}\n")
     stdout.write(f"Daily NAV date range: {_format_range(summary.daily_nav_date_range)}\n")
     stdout.write(f"Duplicate dedupe keys: {len(summary.duplicate_dedupe_keys)}\n")
-    for dedupe_key in summary.duplicate_dedupe_keys[:5]:
-        stdout.write(f"  - {dedupe_key}\n")
     stdout.write("No database writes performed.\n")
 
 

@@ -100,6 +100,24 @@ class IngestionCliTests(unittest.TestCase):
         self.assertEqual(exit_code, 1)
         self.assertIn("Error:", stderr.getvalue())
 
+    def test_dry_run_duplicate_key_amount_not_in_output(self) -> None:
+        """Fallback dedupe keys contain amounts; verify they are not printed."""
+        xml_with_dup = """<FlexQueryResponse>
+  <CashTransaction accountId="U100" reportDate="20250102" dateTime="20250102;091500" currency="USD" amount="99999.99" fxRateToBase="1" type="Deposits/Withdrawals" />
+  <CashTransaction accountId="U100" reportDate="20250102" dateTime="20250102;091500" currency="USD" amount="99999.99" fxRateToBase="1" type="Deposits/Withdrawals" />
+</FlexQueryResponse>"""
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "dup.xml"
+            path.write_text(xml_with_dup, encoding="utf-8")
+            stdout = io.StringIO()
+
+            exit_code = run(["dry-run", str(path)], stdout=stdout, stderr=io.StringIO())
+
+        output = stdout.getvalue()
+        self.assertEqual(exit_code, 0)
+        self.assertIn("Duplicate dedupe keys: 1", output)
+        self.assertNotIn("99999.99", output)
+
     def test_script_wrapper_imports_main(self) -> None:
         import scripts.ingest_flex_file as ingest_flex_file_script
 
