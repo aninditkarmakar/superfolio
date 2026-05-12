@@ -18,6 +18,8 @@ copilot plugin marketplace remove superpowers-marketplace --force 2>/dev/null ||
 copilot plugin marketplace add obra/superpowers-marketplace
 copilot plugin install superpowers@superpowers-marketplace
 
+python -m pip install -r requirements.txt
+
 # Configure git identity from .env if present
 if [ -f .env ]; then
   GITHUB_NAME=$(grep -E '^GITHUB_NAME=' .env | cut -d '=' -f2- | tr -d '"' | tr -d "'")
