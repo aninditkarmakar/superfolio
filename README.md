@@ -178,7 +178,7 @@ python scripts/ingest_flex_file.py load scratch/Flex.xml \
 
 The load command uses `DATABASE_URL` by default. Pass `--database-url` to override it for one run. One load command creates one ingestion run for the whole file, bulk-loads supported cash-flow and daily NAV records, and prints privacy-safe inserted/duplicate/skipped/conflict counts. Duplicate records are treated as idempotent re-ingestion; unknown accounts, inactive accounts, and conflicts mark the ingestion run `partially_succeeded`.
 
-Both dry-run and load are account-scoped. The command only maps supported records whose Flex `accountId` matches `--account-external-id`; supported records for other accounts are counted as skipped warnings and are not written. Load mode also records the selected account on the ingestion run for auditability.
+Both dry-run and load are account-scoped. The command only maps supported records whose Flex `accountId` matches `--account-external-id`; supported records for other accounts are counted and reported in the output summary but are not written. Load mode also records the selected account on the ingestion run for auditability.
 
 ## 📊 Database Migrations
 
