@@ -144,6 +144,8 @@ class IngestionLoadCliTests(unittest.TestCase):
         self.assertEqual(database.completed, [("run-123", "succeeded", None)])
         self.assertIn("Cash-flow records skipped for other accounts: 1", output)
         self.assertIn("Daily NAV snapshots skipped for other accounts: 1", output)
+        self.assertNotIn("1000.00", output)
+        self.assertNotIn("10000.00", output)
         self.assertNotIn("2000.00", output)
         self.assertNotIn("20000.00", output)
 
@@ -387,3 +389,34 @@ class IngestionLoadCliTests(unittest.TestCase):
         self.assertEqual(exit_code, 1)
         self.assertIn("db connection refused", stderr.getvalue())
         self.assertEqual(database.completed, [])
+
+    def test_load_with_no_matching_records_still_succeeds_with_skipped_counts(self) -> None:
+        xml = """<FlexQueryResponse>
+  <CashTransaction accountId="U200" reportDate="20250102" dateTime="20250102;091501" currency="USD" amount="2000.00" fxRateToBase="1" type="Deposits/Withdrawals" transactionID="CF2" />
+  <EquitySummaryByReportDateInBase accountId="U200" reportDate="20250102" currency="USD" total="20000.00" />
+</FlexQueryResponse>"""
+        database = FakeDatabase()
+        connector = Connector(database)
+        directory, path = self.write_xml(xml)
+        self.addCleanup(directory.cleanup)
+        stdout = io.StringIO()
+
+        exit_code = run(
+            ["load", str(path), "--brokerage-code", "IBKR", "--account-external-id", "U100"],
+            stdout=stdout,
+            stderr=io.StringIO(),
+            database_connector=connector,
+        )
+
+        output = stdout.getvalue()
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(database.cash_records, [])
+        self.assertEqual(database.nav_records, [])
+        self.assertEqual(database.completed, [("run-123", "succeeded", None)])
+        self.assertIn("Target account: U100", output)
+        self.assertIn("Cash-flow records mapped: 0", output)
+        self.assertIn("Daily NAV snapshots mapped: 0", output)
+        self.assertIn("Cash-flow records skipped for other accounts: 1", output)
+        self.assertIn("Daily NAV snapshots skipped for other accounts: 1", output)
+        self.assertNotIn("2000.00", output)
+        self.assertNotIn("20000.00", output)
