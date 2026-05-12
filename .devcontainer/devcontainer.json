@@ -16,9 +16,7 @@
 	"customizations": {
 		"vscode": {
 			"extensions": [
-				"mechatroner.rainbow-csv",
-				"bierner.markdown-mermaid",
-				"eamodio.gitlens"
+				"mechatroner.rainbow-csv"
 			]
 		}
 	},
