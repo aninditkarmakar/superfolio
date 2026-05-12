@@ -13,7 +13,7 @@
 - [portfolio_engine/](portfolio_engine/) contains the Python engine, Flex XML parsing, ingestion mappers, database adapter, and CLI support code.
 - [scripts/](scripts/) contains user-facing CLIs for TWR calculation, account registration, and manual Flex XML dry-run/load workflows.
 - [tests/](tests/) contains the current Python test suite.
-- [migrations/](migrations/) and [sqitch.conf](sqitch.conf) define PostgreSQL schema changes managed by Sqitch. See [docs/er-diagram.md](docs/er-diagram.md) and [docs/database-functions.md](docs/database-functions.md) for database design and function contracts.
+- [migrations/](migrations/) and [sqitch.conf](sqitch.conf) define PostgreSQL schema changes managed by Sqitch. See [docs/database/schema.md](docs/database/schema.md) and [docs/database/functions.md](docs/database/functions.md) for database design and function contracts.
 - [requirements.txt](requirements.txt) currently declares the PostgreSQL adapter dependency (`psycopg[binary]`).
 - [.devcontainer/devcontainer.json](.devcontainer/devcontainer.json) defines the current dev container: TypeScript/Node base image extended by [.devcontainer/Dockerfile](.devcontainer/Dockerfile), with a Python 3.12 feature, `postgresql-client`, `sqitch`, and `libdbd-pg-perl`.
 - [scratch/](scratch/) is ignored by Git and contains local IBKR Flex XML samples such as cash-flow and daily-NAV reports. Treat this directory as private/local data: do not commit it, do not paste raw account data into docs, and prefer synthetic fixtures for tests.
