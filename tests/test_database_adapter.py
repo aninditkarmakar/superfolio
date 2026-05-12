@@ -362,6 +362,24 @@ class DatabaseAdapterTests(unittest.TestCase):
         with self.assertRaisesRegex(DatabaseConfigurationError, "DATABASE_URL"):
             connect_database("   ")
 
+    def test_public_database_adapter_imports_are_available(self) -> None:
+        from portfolio_engine.database import (
+            AccountRegistration,
+            BulkIngestionSummary,
+            DatabaseConfigurationError,
+            IngestionRunStart,
+            SuperFolioDatabase,
+            connect_database,
+        )
+
+        self.assertIsNotNone(AccountRegistration)
+        self.assertIsNotNone(BulkIngestionSummary)
+        self.assertIsNotNone(DatabaseConfigurationError)
+        self.assertIsNotNone(IngestionRunStart)
+        self.assertIsNotNone(SuperFolioDatabase)
+        self.assertIsNotNone(connect_database)
+
+
 
 if __name__ == "__main__":
     unittest.main()

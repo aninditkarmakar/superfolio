@@ -2,6 +2,18 @@
 
 SuperFolio uses PostgreSQL functions as the database mutation boundary for ingestion and account administration. Application and ingestion clients should call these functions instead of writing directly to normalized ingestion tables.
 
+## Python adapter
+
+Python code should use `portfolio_engine.database.SuperFolioDatabase` as the database boundary instead of calling SQL directly. Construct it with `connect_database()` for real PostgreSQL usage or inject a connection-like object in tests.
+
+The adapter wraps:
+
+- `register_account(...)`
+- `start_ingestion_run(...)`
+- `complete_ingestion_run(...)`
+- `bulk_ingest_cash_flows(...)`
+- `bulk_ingest_daily_nav_snapshots(...)`
+
 ## Account functions
 
 | Function | Purpose |
