@@ -2,14 +2,25 @@
 
 from __future__ import annotations
 
+import argparse
+import sys
 from dataclasses import dataclass
-from typing import TextIO
+from typing import Callable, Protocol, TextIO
 
-from portfolio_engine.database import AccountRegistration
+from portfolio_engine.database import AccountRegistration, connect_database
 
 
 class AccountCliError(RuntimeError):
     """Raised when account CLI input is missing or invalid."""
+
+
+class AccountDatabase(Protocol):
+    def __enter__(self) -> "AccountDatabase": ...
+    def __exit__(self, exc_type: object, exc: object, traceback: object) -> None: ...
+    def register_account(self, registration: AccountRegistration) -> str: ...
+
+
+AdapterFactory = Callable[[str | None], AccountDatabase]
 
 
 @dataclass(frozen=True)
@@ -27,6 +38,58 @@ FIELD_SPECS = (
     FieldSpec("base_currency", "--base-currency", "Base currency", True),
     FieldSpec("display_name", "--display-name", "Display name", False),
 )
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description="Register a brokerage account for ingestion.")
+    parser.add_argument("--brokerage-code", help="Brokerage code, for example IBKR.")
+    parser.add_argument("--external-id", help="Brokerage account identifier, for example U100.")
+    parser.add_argument("--account-type", help="Account type label, for example Individual.")
+    parser.add_argument("--base-currency", help="Account base currency, for example USD.")
+    parser.add_argument("--display-name", help="Optional friendly account display name.")
+    parser.add_argument(
+        "--database-url",
+        help="Optional PostgreSQL connection URL. Defaults to DATABASE_URL via the DB adapter.",
+    )
+    return parser
+
+
+def run(
+    argv: list[str] | None = None,
+    *,
+    adapter_factory: AdapterFactory = connect_database,
+    stdin: TextIO = sys.stdin,
+    stdout: TextIO = sys.stdout,
+    stderr: TextIO = sys.stderr,
+    interactive: bool | None = None,
+) -> int:
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    is_interactive = stdin.isatty() if interactive is None else interactive
+
+    try:
+        registration = resolve_registration(
+            brokerage_code=args.brokerage_code,
+            external_id=args.external_id,
+            account_type=args.account_type,
+            base_currency=args.base_currency,
+            display_name=args.display_name,
+            stdin=stdin,
+            stdout=stdout,
+            interactive=is_interactive,
+        )
+        with adapter_factory(args.database_url) as database:
+            account_id = database.register_account(registration)
+    except Exception as error:
+        stderr.write(f"Error: {error}\n")
+        return 1
+
+    _print_success(account_id, registration, stdout)
+    return 0
+
+
+def main(argv: list[str] | None = None) -> int:
+    return run(argv)
 
 
 def resolve_registration(
@@ -116,3 +179,12 @@ def _required_value(value: str | None, flag: str) -> str:
     if value is None:
         raise AccountCliError(f"Missing required option: {flag}")
     return value
+
+
+def _print_success(account_id: str, registration: AccountRegistration, stdout: TextIO) -> None:
+    stdout.write(f"Registered account: {account_id}\n")
+    stdout.write(f"Brokerage: {registration.brokerage_code}\n")
+    stdout.write(f"External ID: {registration.external_id}\n")
+    stdout.write(f"Account type: {registration.account_type}\n")
+    stdout.write(f"Base currency: {registration.base_currency}\n")
+    stdout.write(f"Display name: {registration.display_name or '(none)'}\n")
