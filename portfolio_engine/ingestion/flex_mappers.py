@@ -209,7 +209,12 @@ def map_cash_transactions_from_flex_xml_text(
     start_date: date | str | None = None,
     end_date: date | str | None = None,
 ) -> list[dict[str, Any]]:
-    """Map Flex CashTransaction elements in XML text to DB bulk records."""
+    """Map Flex CashTransaction XML into DB bulk payload dictionaries.
+
+    The Flex ``reportDate`` attribute is the canonical flow date.
+    ``cash_flow_type`` filters records when non-empty; pass an empty string
+    to include all transaction types.
+    """
     root = ElementTree.fromstring(xml_text)
     start_date_iso = _date_to_iso(start_date)
     end_date_iso = _date_to_iso(end_date)
