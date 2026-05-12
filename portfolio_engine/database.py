@@ -22,6 +22,7 @@ class ConnectionLike(Protocol):
     def cursor(self) -> CursorLike: ...
     def commit(self) -> None: ...
     def rollback(self) -> None: ...
+    def close(self) -> None: ...
 
 
 @dataclass(frozen=True)
@@ -36,6 +37,15 @@ class AccountRegistration:
 class SuperFolioDatabase:
     def __init__(self, connection: ConnectionLike) -> None:
         self._connection = connection
+
+    def __enter__(self) -> "SuperFolioDatabase":
+        return self
+
+    def __exit__(self, exc_type: object, exc: object, traceback: object) -> None:
+        self.close()
+
+    def close(self) -> None:
+        self._connection.close()
 
     def register_account(self, registration: AccountRegistration) -> str:
         row = self._fetch_one(

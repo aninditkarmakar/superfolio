@@ -36,6 +36,7 @@ class FakeConnection:
         self.cursor_instance = FakeCursor(row)
         self.commit_count = 0
         self.rollback_count = 0
+        self.close_count = 0
 
     def cursor(self) -> FakeCursor:
         return self.cursor_instance
@@ -45,6 +46,9 @@ class FakeConnection:
 
     def rollback(self) -> None:
         self.rollback_count += 1
+
+    def close(self) -> None:
+        self.close_count += 1
 
 
 class FailingConnection(FakeConnection):
@@ -129,6 +133,22 @@ class DatabaseAdapterTests(unittest.TestCase):
 
         self.assertEqual(connection.commit_count, 0)
         self.assertEqual(connection.rollback_count, 1)
+
+    def test_database_close_closes_underlying_connection(self) -> None:
+        connection = FakeConnection(("account-uuid",))
+        database = SuperFolioDatabase(connection)
+
+        database.close()
+
+        self.assertEqual(connection.close_count, 1)
+
+    def test_database_context_manager_closes_underlying_connection(self) -> None:
+        connection = FakeConnection(("account-uuid",))
+
+        with SuperFolioDatabase(connection) as database:
+            self.assertIsInstance(database, SuperFolioDatabase)
+
+        self.assertEqual(connection.close_count, 1)
 
     def test_connect_database_requires_database_url(self) -> None:
         original = os.environ.pop("DATABASE_URL", None)
