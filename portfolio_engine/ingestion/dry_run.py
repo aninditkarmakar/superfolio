@@ -63,7 +63,7 @@ class FlexDryRunSummary:
         return len(self.daily_nav_records)
 
 
-# NOTE: Fields mirror FlexDryRunSummary exactly. Keep both in sync when adding fields.
+# NOTE: Fields mirror FlexDryRunSummary and AccountScopedFlexAnalysisResult exactly. Keep all three in sync when adding fields.
 @dataclass(frozen=True)
 class FlexAnalysisResult:
     cash_flow_records: tuple[dict[str, Any], ...]
@@ -123,7 +123,7 @@ class FlexAnalysisResult:
             cash_flow_records=cash_flow_records,
             daily_nav_records=daily_nav_records,
             unsupported_cash_transaction_count=self.unsupported_cash_transaction_count,
-            accounts_seen=(target,) if target else (),
+            accounts_seen=(target,) if (cash_flow_records or daily_nav_records) else (),
             currencies_seen=_sorted_unique(record["source_currency"] for record in all_records),
             cash_flow_date_range=_record_date_range(list(cash_flow_records), "flow_date"),
             daily_nav_date_range=_record_date_range(list(daily_nav_records), "snapshot_date"),

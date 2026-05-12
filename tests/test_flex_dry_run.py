@@ -7,6 +7,7 @@ from portfolio_engine.ingestion.dry_run import (
     analyze_flex_xml_file_for_ingestion,
     analyze_flex_xml_text,
     analyze_flex_xml_text_for_ingestion,
+    AccountScopedFlexAnalysisResult,
     FlexAnalysisResult,
     FlexDryRunSummary,
 )
@@ -122,8 +123,10 @@ class FlexDryRunTests(unittest.TestCase):
         import dataclasses
 
         result_fields = {f.name for f in dataclasses.fields(FlexAnalysisResult)}
+        scoped_fields = {f.name for f in dataclasses.fields(AccountScopedFlexAnalysisResult)}
         summary_fields = {f.name for f in dataclasses.fields(FlexDryRunSummary)}
         self.assertEqual(result_fields, summary_fields)
+        self.assertEqual(scoped_fields, summary_fields)
 
     def test_analyze_flex_xml_file_for_ingestion_reads_file(self) -> None:
         import tempfile
@@ -155,6 +158,18 @@ class FlexDryRunTests(unittest.TestCase):
         self.assertEqual(scoped.daily_nav_records[0]["account_external_id"], "U100")
         self.assertEqual(scoped.skipped_other_account_cash_flow_count, 1)
         self.assertEqual(scoped.skipped_other_account_daily_nav_count, 1)
+
+    def test_analysis_for_missing_account_has_empty_accounts_seen(self) -> None:
+        analysis = analyze_flex_xml_text_for_ingestion(MIXED_ACCOUNT_XML)
+
+        scoped = analysis.for_account("U999")
+
+        self.assertEqual(scoped.account_external_id, "U999")
+        self.assertEqual(scoped.accounts_seen, ())
+        self.assertEqual(scoped.cash_flow_count, 0)
+        self.assertEqual(scoped.daily_nav_count, 0)
+        self.assertEqual(scoped.skipped_other_account_cash_flow_count, 2)
+        self.assertEqual(scoped.skipped_other_account_daily_nav_count, 2)
 
     def test_account_scoped_dry_run_summary_is_sanitized(self) -> None:
         summary = analyze_flex_xml_text(
