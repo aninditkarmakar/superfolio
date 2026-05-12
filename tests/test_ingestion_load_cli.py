@@ -102,6 +102,51 @@ class IngestionLoadCliTests(unittest.TestCase):
         self.assertIn("Error:", stderr.getvalue())
         self.assertIn("brokerage-code", stderr.getvalue())
 
+    def test_load_requires_account_external_id(self) -> None:
+        stderr = io.StringIO()
+
+        exit_code = run(
+            ["load", "Flex.xml", "--brokerage-code", "IBKR"],
+            stdout=io.StringIO(),
+            stderr=stderr,
+        )
+
+        self.assertEqual(exit_code, 1)
+        self.assertIn("Error:", stderr.getvalue())
+        self.assertIn("account-external-id", stderr.getvalue())
+
+    def test_load_filters_to_target_account_and_reports_other_account_skips(self) -> None:
+        xml = """<FlexQueryResponse>
+  <CashTransaction accountId="U100" reportDate="20250102" dateTime="20250102;091500" currency="USD" amount="1000.00" fxRateToBase="1" type="Deposits/Withdrawals" transactionID="CF1" />
+  <CashTransaction accountId="U200" reportDate="20250102" dateTime="20250102;091501" currency="USD" amount="2000.00" fxRateToBase="1" type="Deposits/Withdrawals" transactionID="CF2" />
+  <EquitySummaryByReportDateInBase accountId="U100" reportDate="20250102" currency="USD" total="10000.00" />
+  <EquitySummaryByReportDateInBase accountId="U200" reportDate="20250102" currency="USD" total="20000.00" />
+</FlexQueryResponse>"""
+        database = FakeDatabase()
+        connector = Connector(database)
+        directory, path = self.write_xml(xml)
+        self.addCleanup(directory.cleanup)
+        stdout = io.StringIO()
+
+        exit_code = run(
+            ["load", str(path), "--brokerage-code", "IBKR", "--account-external-id", "U100"],
+            stdout=stdout,
+            stderr=io.StringIO(),
+            database_connector=connector,
+        )
+
+        output = stdout.getvalue()
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(len(database.cash_records[0]), 1)
+        self.assertEqual(database.cash_records[0][0]["account_external_id"], "U100")
+        self.assertEqual(len(database.nav_records[0]), 1)
+        self.assertEqual(database.nav_records[0][0]["account_external_id"], "U100")
+        self.assertEqual(database.completed, [("run-123", "succeeded", None)])
+        self.assertIn("Cash-flow records skipped for other accounts: 1", output)
+        self.assertIn("Daily NAV snapshots skipped for other accounts: 1", output)
+        self.assertNotIn("2000.00", output)
+        self.assertNotIn("20000.00", output)
+
     def test_load_passes_database_url_override_to_connector(self) -> None:
         connector = Connector()
         directory, path = self.write_xml()
@@ -113,6 +158,8 @@ class IngestionLoadCliTests(unittest.TestCase):
                 str(path),
                 "--brokerage-code",
                 "IBKR",
+                "--account-external-id",
+                "U100",
                 "--database-url",
                 "postgresql://example",
             ],
@@ -137,6 +184,8 @@ class IngestionLoadCliTests(unittest.TestCase):
                 str(path),
                 "--brokerage-code",
                 "IBKR",
+                "--account-external-id",
+                "U100",
                 "--start-date",
                 "2025-01-01",
                 "--end-date",
@@ -151,6 +200,7 @@ class IngestionLoadCliTests(unittest.TestCase):
         self.assertEqual(exit_code, 0)
         self.assertEqual(len(database.started), 1)
         self.assertEqual(database.started[0].brokerage_code, "IBKR")
+        self.assertEqual(database.started[0].account_external_id, "U100")
         self.assertEqual(database.started[0].source_type, "manual_file")
         self.assertEqual(database.started[0].source_filename, "Flex.xml")
         self.assertEqual(database.started[0].requested_start_date.isoformat(), "2025-01-01")
@@ -162,6 +212,7 @@ class IngestionLoadCliTests(unittest.TestCase):
         self.assertEqual(database.completed, [("run-123", "succeeded", None)])
         self.assertIn("Load:", output)
         self.assertIn("Ingestion run: run-123", output)
+        self.assertIn("Target account: U100", output)
         self.assertIn("Cash-flow results: inserted=1 duplicate=0 skipped_unknown=0 skipped_inactive=0 conflicts=0", output)
         self.assertIn("Daily NAV results: inserted=1 duplicate=0 skipped_unknown=0 skipped_inactive=0 conflicts=0", output)
         self.assertIn("Final status: succeeded", output)
@@ -178,7 +229,7 @@ class IngestionLoadCliTests(unittest.TestCase):
         self.addCleanup(directory.cleanup)
 
         exit_code = run(
-            ["load", str(path), "--brokerage-code", "IBKR"],
+            ["load", str(path), "--brokerage-code", "IBKR", "--account-external-id", "U100"],
             stdout=io.StringIO(),
             stderr=io.StringIO(),
             database_connector=connector,
@@ -198,7 +249,7 @@ class IngestionLoadCliTests(unittest.TestCase):
         stdout = io.StringIO()
 
         exit_code = run(
-            ["load", str(path), "--brokerage-code", "IBKR"],
+            ["load", str(path), "--brokerage-code", "IBKR", "--account-external-id", "U100"],
             stdout=stdout,
             stderr=io.StringIO(),
             database_connector=connector,
@@ -223,7 +274,7 @@ class IngestionLoadCliTests(unittest.TestCase):
         self.addCleanup(directory.cleanup)
 
         exit_code = run(
-            ["load", str(path), "--brokerage-code", "IBKR"],
+            ["load", str(path), "--brokerage-code", "IBKR", "--account-external-id", "U100"],
             stdout=io.StringIO(),
             stderr=io.StringIO(),
             database_connector=connector,
@@ -246,7 +297,7 @@ class IngestionLoadCliTests(unittest.TestCase):
         stderr = io.StringIO()
 
         exit_code = run(
-            ["load", str(path), "--brokerage-code", "IBKR"],
+            ["load", str(path), "--brokerage-code", "IBKR", "--account-external-id", "U100"],
             stdout=io.StringIO(),
             stderr=stderr,
             database_connector=connector,
@@ -279,7 +330,7 @@ class IngestionLoadCliTests(unittest.TestCase):
         stderr = io.StringIO()
 
         exit_code = run(
-            ["load", str(path), "--brokerage-code", "IBKR"],
+            ["load", str(path), "--brokerage-code", "IBKR", "--account-external-id", "U100"],
             stdout=io.StringIO(),
             stderr=stderr,
             database_connector=connector,
@@ -302,7 +353,7 @@ class IngestionLoadCliTests(unittest.TestCase):
         stdout = io.StringIO()
 
         exit_code = run(
-            ["load", str(path), "--brokerage-code", "IBKR"],
+            ["load", str(path), "--brokerage-code", "IBKR", "--account-external-id", "U100"],
             stdout=stdout,
             stderr=io.StringIO(),
             database_connector=connector,
@@ -327,7 +378,7 @@ class IngestionLoadCliTests(unittest.TestCase):
         stderr = io.StringIO()
 
         exit_code = run(
-            ["load", str(path), "--brokerage-code", "IBKR"],
+            ["load", str(path), "--brokerage-code", "IBKR", "--account-external-id", "U100"],
             stdout=io.StringIO(),
             stderr=stderr,
             database_connector=connector,

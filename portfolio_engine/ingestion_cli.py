@@ -16,6 +16,7 @@ from portfolio_engine.database import (
     connect_database,
 )
 from portfolio_engine.ingestion.dry_run import (
+    AccountScopedFlexAnalysisResult,
     FlexAnalysisResult,
     FlexDryRunSummary,
     analyze_flex_xml_file,
@@ -50,6 +51,7 @@ def build_parser() -> argparse.ArgumentParser:
     load = subparsers.add_parser("load", help="Load supported Flex records into the database.")
     load.add_argument("file", type=Path, help="Flex XML file to load.")
     load.add_argument("--brokerage-code", required=True, help="Brokerage code for this file, e.g. IBKR.")
+    load.add_argument("--account-external-id", required=True, help="Brokerage account external ID to load.")
     load.add_argument("--database-url", help="Database URL override for this run.")
     load.add_argument("--start-date", type=_parse_iso_date, help="Inclusive reportDate filter start.")
     load.add_argument("--end-date", type=_parse_iso_date, help="Inclusive reportDate filter end.")
@@ -112,12 +114,14 @@ def _load_flex_file(
         start_date=args.start_date,
         end_date=args.end_date,
     )
+    scoped = analysis.for_account(args.account_external_id)
     with database_connector(args.database_url) as database:
         ingestion_run_id: str | None = None
         try:
             ingestion_run_id = database.start_ingestion_run(
                 IngestionRunStart(
                     brokerage_code=args.brokerage_code,
+                    account_external_id=args.account_external_id,
                     source_type=SOURCE_TYPE_MANUAL_FILE,
                     requested_start_date=_date_or_none(args.start_date),
                     requested_end_date=_date_or_none(args.end_date),
@@ -126,15 +130,15 @@ def _load_flex_file(
             )
             cash_summary = _empty_bulk_summary()
             nav_summary = _empty_bulk_summary()
-            if analysis.cash_flow_records:
+            if scoped.cash_flow_records:
                 cash_summary = database.bulk_ingest_cash_flows(
                     ingestion_run_id,
-                    list(analysis.cash_flow_records),
+                    list(scoped.cash_flow_records),
                 )
-            if analysis.daily_nav_records:
+            if scoped.daily_nav_records:
                 nav_summary = database.bulk_ingest_daily_nav_snapshots(
                     ingestion_run_id,
-                    list(analysis.daily_nav_records),
+                    list(scoped.daily_nav_records),
                 )
             final_status, message = _derive_final_status(cash_summary, nav_summary)
             database.complete_ingestion_run(
@@ -150,7 +154,7 @@ def _load_flex_file(
         _print_load_summary(
             args.file,
             ingestion_run_id,
-            analysis,
+            scoped,
             cash_summary,
             nav_summary,
             final_status,
@@ -212,7 +216,7 @@ def _has_partial_conditions(summary: BulkIngestionSummary) -> bool:
 def _print_load_summary(
     path: Path,
     ingestion_run_id: str,
-    analysis: FlexAnalysisResult,
+    analysis: AccountScopedFlexAnalysisResult,
     cash_summary: BulkIngestionSummary,
     nav_summary: BulkIngestionSummary,
     final_status: str,
@@ -221,6 +225,7 @@ def _print_load_summary(
 ) -> None:
     stdout.write(f"Load: {path}\n")
     stdout.write(f"Ingestion run: {ingestion_run_id}\n")
+    stdout.write(f"Target account: {analysis.account_external_id}\n")
     stdout.write(f"Cash-flow records mapped: {analysis.cash_flow_count}\n")
     stdout.write(f"Daily NAV snapshots mapped: {analysis.daily_nav_count}\n")
     stdout.write(
@@ -228,7 +233,12 @@ def _print_load_summary(
     )
     stdout.write(f"Cash-flow results: {_format_bulk_summary(cash_summary)}\n")
     stdout.write(f"Daily NAV results: {_format_bulk_summary(nav_summary)}\n")
-    stdout.write(f"Accounts seen: {_format_tuple(analysis.accounts_seen)}\n")
+    stdout.write(
+        f"Cash-flow records skipped for other accounts: {analysis.skipped_other_account_cash_flow_count}\n"
+    )
+    stdout.write(
+        f"Daily NAV snapshots skipped for other accounts: {analysis.skipped_other_account_daily_nav_count}\n"
+    )
     stdout.write(f"Currencies seen: {_format_tuple(analysis.currencies_seen)}\n")
     skipped_accounts = _combined_skipped_accounts(cash_summary, nav_summary)
     if skipped_accounts:
