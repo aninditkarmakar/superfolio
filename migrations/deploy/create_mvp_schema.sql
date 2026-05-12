@@ -36,6 +36,7 @@ CREATE TABLE public.accounts (
 CREATE TABLE public.ingestion_runs (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     brokerage_id UUID NOT NULL REFERENCES public.brokerages(id),
+    account_id UUID NOT NULL REFERENCES public.accounts(id),
     source_type VARCHAR(30) NOT NULL,
     status VARCHAR(30) NOT NULL,
     requested_start_date DATE,
@@ -283,6 +284,7 @@ $$;
 
 CREATE FUNCTION public.start_ingestion_run(
     p_brokerage_code TEXT,
+    p_account_external_id TEXT,
     p_source_type TEXT,
     p_requested_start_date DATE DEFAULT NULL,
     p_requested_end_date DATE DEFAULT NULL,
@@ -293,10 +295,15 @@ LANGUAGE plpgsql
 AS $$
 DECLARE
     v_brokerage_id UUID;
+    v_account_id UUID;
     v_ingestion_run_id UUID;
 BEGIN
     IF p_source_type IS NULL OR btrim(p_source_type) = '' THEN
         RAISE EXCEPTION 'source_type must not be NULL or blank';
+    END IF;
+
+    IF p_account_external_id IS NULL OR btrim(p_account_external_id) = '' THEN
+        RAISE EXCEPTION 'account_external_id must not be NULL or blank';
     END IF;
 
     SELECT id INTO v_brokerage_id
@@ -308,8 +315,21 @@ BEGIN
         RAISE EXCEPTION 'Unknown or inactive brokerage code: %', p_brokerage_code;
     END IF;
 
+    SELECT id INTO v_account_id
+    FROM public.accounts
+    WHERE brokerage_id = v_brokerage_id
+      AND external_id = btrim(p_account_external_id)
+      AND is_active = true;
+
+    IF v_account_id IS NULL THEN
+        RAISE EXCEPTION 'Unknown or inactive account external_id % for brokerage %',
+            p_account_external_id,
+            p_brokerage_code;
+    END IF;
+
     INSERT INTO public.ingestion_runs (
         brokerage_id,
+        account_id,
         source_type,
         status,
         requested_start_date,
@@ -318,6 +338,7 @@ BEGIN
     )
     VALUES (
         v_brokerage_id,
+        v_account_id,
         upper(btrim(p_source_type)),
         'running',
         p_requested_start_date,
@@ -328,6 +349,7 @@ BEGIN
 
     RETURN v_ingestion_run_id;
 END;
+$$;
 $$;
 
 CREATE FUNCTION public.complete_ingestion_run(

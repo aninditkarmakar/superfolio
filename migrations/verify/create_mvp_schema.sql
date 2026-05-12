@@ -48,13 +48,14 @@ WHERE table_schema = 'public'
       'updated_at'
   );
 
-SELECT 1 / (count(*) = 11)::int
+SELECT 1 / (count(*) = 12)::int
 FROM information_schema.columns
 WHERE table_schema = 'public'
   AND table_name = 'ingestion_runs'
   AND column_name IN (
       'id',
       'brokerage_id',
+      'account_id',
       'source_type',
       'status',
       'requested_start_date',
@@ -200,6 +201,7 @@ DECLARE
 BEGIN
     v_ingestion_run_id := public.start_ingestion_run(
         'IBKR',
+        'U100',
         'MANUAL_FILE',
         DATE '2026-01-01',
         DATE '2026-01-31',
@@ -225,6 +227,58 @@ BEGIN
 END;
 $$;
 
+DO $$
+DECLARE
+    v_account_id UUID;
+    v_ingestion_run_id UUID;
+    v_run_account_id UUID;
+BEGIN
+    SELECT public.register_account(
+        'IBKR',
+        'UVERIFY',
+        'INDIVIDUAL',
+        'USD',
+        'Verify Account'
+    ) INTO v_account_id;
+
+    v_ingestion_run_id := public.start_ingestion_run(
+        'IBKR',
+        'UVERIFY',
+        'MANUAL_FILE',
+        DATE '2026-03-01',
+        DATE '2026-03-31',
+        'account-scoped.xml'
+    );
+
+    SELECT account_id INTO v_run_account_id
+    FROM public.ingestion_runs
+    WHERE id = v_ingestion_run_id;
+
+    IF v_run_account_id IS DISTINCT FROM v_account_id THEN
+        RAISE EXCEPTION 'Ingestion run account_id verification failed for %', v_ingestion_run_id;
+    END IF;
+END;
+$$;
+
+DO $$
+BEGIN
+    PERFORM public.start_ingestion_run(
+        'IBKR',
+        'UDOESNOTEXIST',
+        'MANUAL_FILE',
+        NULL,
+        NULL,
+        'unknown-account.xml'
+    );
+    RAISE EXCEPTION 'Expected start_ingestion_run to reject an unknown account';
+EXCEPTION
+    WHEN OTHERS THEN
+        IF SQLERRM = 'Expected start_ingestion_run to reject an unknown account' THEN
+            RAISE;
+        END IF;
+END;
+$$;
+
 WITH account_created AS (
     SELECT public.register_account(
         'IBKR',
@@ -237,6 +291,7 @@ WITH account_created AS (
 run_started AS (
     SELECT public.start_ingestion_run(
         'IBKR',
+        'U100',
         'MANUAL_FILE',
         DATE '2026-02-01',
         DATE '2026-02-28',

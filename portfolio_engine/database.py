@@ -38,6 +38,7 @@ class AccountRegistration:
 @dataclass(frozen=True)
 class IngestionRunStart:
     brokerage_code: str
+    account_external_id: str
     source_type: str
     requested_start_date: date | None = None
     requested_end_date: date | None = None
@@ -83,9 +84,10 @@ class SuperFolioDatabase:
 
     def start_ingestion_run(self, request: IngestionRunStart) -> str:
         row = self._fetch_one(
-            "SELECT public.start_ingestion_run(%s, %s, %s, %s, %s)",
+            "SELECT public.start_ingestion_run(%s, %s, %s, %s, %s, %s)",
             (
                 request.brokerage_code,
+                request.account_external_id,
                 request.source_type,
                 request.requested_start_date,
                 request.requested_end_date,

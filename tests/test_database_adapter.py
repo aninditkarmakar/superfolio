@@ -78,6 +78,7 @@ class DatabaseAdapterTests(unittest.TestCase):
     def test_ingestion_run_start_is_immutable(self) -> None:
         request = IngestionRunStart(
             brokerage_code="IBKR",
+            account_external_id="U100",
             source_type="MANUAL_FILE",
             requested_start_date=date(2026, 5, 1),
             requested_end_date=date(2026, 5, 31),
@@ -139,6 +140,7 @@ class DatabaseAdapterTests(unittest.TestCase):
         run_id = database.start_ingestion_run(
             IngestionRunStart(
                 brokerage_code="IBKR",
+                account_external_id="U100",
                 source_type="MANUAL_FILE",
                 requested_start_date=date(2026, 5, 1),
                 requested_end_date=date(2026, 5, 31),
@@ -153,9 +155,10 @@ class DatabaseAdapterTests(unittest.TestCase):
             connection.cursor_instance.executed,
             [
                 (
-                    "SELECT public.start_ingestion_run(%s, %s, %s, %s, %s)",
+                    "SELECT public.start_ingestion_run(%s, %s, %s, %s, %s, %s)",
                     (
                         "IBKR",
+                        "U100",
                         "MANUAL_FILE",
                         date(2026, 5, 1),
                         date(2026, 5, 31),
@@ -172,13 +175,14 @@ class DatabaseAdapterTests(unittest.TestCase):
         database.start_ingestion_run(
             IngestionRunStart(
                 brokerage_code="IBKR",
+                account_external_id="U100",
                 source_type="MANUAL_FILE",
             )
         )
 
         self.assertEqual(
             connection.cursor_instance.executed[0][1],
-            ("IBKR", "MANUAL_FILE", None, None, None),
+            ("IBKR", "U100", "MANUAL_FILE", None, None, None),
         )
 
     def test_start_ingestion_run_rolls_back_and_reraises_on_failure(self) -> None:
@@ -189,6 +193,7 @@ class DatabaseAdapterTests(unittest.TestCase):
             database.start_ingestion_run(
                 IngestionRunStart(
                     brokerage_code="IBKR",
+                    account_external_id="U100",
                     source_type="MANUAL_FILE",
                 )
             )
