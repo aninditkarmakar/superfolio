@@ -314,3 +314,25 @@ class IngestionLoadCliTests(unittest.TestCase):
         self.assertNotIn("88888.88", output)
         self.assertNotIn("raw_payload", output)
         self.assertNotIn("dedupe_key", output)
+
+    def test_load_failure_before_run_start_does_not_mark_run_failed(self) -> None:
+        class FailingStartDatabase(FakeDatabase):
+            def start_ingestion_run(self, request: IngestionRunStart) -> str:
+                raise RuntimeError("db connection refused")
+
+        database = FailingStartDatabase()
+        connector = Connector(database)
+        directory, path = self.write_xml()
+        self.addCleanup(directory.cleanup)
+        stderr = io.StringIO()
+
+        exit_code = run(
+            ["load", str(path), "--brokerage-code", "IBKR"],
+            stdout=io.StringIO(),
+            stderr=stderr,
+            database_connector=connector,
+        )
+
+        self.assertEqual(exit_code, 1)
+        self.assertIn("db connection refused", stderr.getvalue())
+        self.assertEqual(database.completed, [])
