@@ -225,6 +225,53 @@ class PortfolioCliTests(unittest.TestCase):
         self.assertEqual(stdout.getvalue(), "")
         self.assertEqual(database.close_count, 1)
 
+    def test_create_bridge_rejects_invalid_decimal_before_database_call(self) -> None:
+        from portfolio_engine.portfolio_cli import run
+
+        database = FakePortfolioDatabase()
+        factory = FakeFactory(database)
+        stderr = io.StringIO()
+
+        with self.assertRaises(SystemExit) as cm:
+            run(
+                [
+                    "create-bridge",
+                    "--portfolio-name", "All Accounts",
+                    "--source-brokerage-code", "IBKR",
+                    "--source-account-external-id", "U100",
+                    "--destination-brokerage-code", "IBKR",
+                    "--destination-account-external-id", "U200",
+                    "--departure-date", "2024-01-15",
+                    "--arrival-date", "2024-01-20",
+                    "--value", "notadecimal",
+                    "--currency", "USD",
+                ],
+                database_connector=factory,
+                stdout=io.StringIO(),
+                stderr=stderr,
+            )
+
+        self.assertEqual(cm.exception.code, 2)
+        self.assertEqual(database.close_count, 0)
+        self.assertEqual(factory.database_urls, [])
+        self.assertIn("invalid decimal value", stderr.getvalue())
+
+    def test_database_url_is_forwarded(self) -> None:
+        from portfolio_engine.portfolio_cli import run
+
+        database = FakePortfolioDatabase()
+        factory = FakeFactory(database)
+
+        exit_code = run(
+            ["--database-url", "postgresql://example", "list"],
+            database_connector=factory,
+            stdout=io.StringIO(),
+            stderr=io.StringIO(),
+        )
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(factory.database_urls, ["postgresql://example"])
+
     def test_script_wrapper_imports_main(self) -> None:
         import scripts.manage_portfolio as manage_portfolio_script
 

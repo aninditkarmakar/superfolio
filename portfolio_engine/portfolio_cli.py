@@ -3,12 +3,20 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
 import sys
 from datetime import date
 from decimal import Decimal
 from typing import Callable, Protocol, TextIO
 
 from .database import connect_database
+
+
+def _decimal_arg(value: str) -> Decimal:
+    try:
+        return Decimal(value)
+    except Exception as error:
+        raise argparse.ArgumentTypeError(f"invalid decimal value: {value!r}") from error
 
 
 class PortfolioAdminDatabase(Protocol):
@@ -52,7 +60,7 @@ def build_parser() -> argparse.ArgumentParser:
     bridge.add_argument("--destination-account-external-id", required=True)
     bridge.add_argument("--departure-date", required=True, type=date.fromisoformat)
     bridge.add_argument("--arrival-date", required=True, type=date.fromisoformat)
-    bridge.add_argument("--value", required=True, type=Decimal)
+    bridge.add_argument("--value", required=True, type=_decimal_arg)
     bridge.add_argument("--currency", required=True)
     bridge.add_argument("--note", default=None)
 
@@ -71,7 +79,8 @@ def run(
 ) -> int:
     try:
         parser = build_parser()
-        args = parser.parse_args(argv)
+        with contextlib.redirect_stderr(stderr):
+            args = parser.parse_args(argv)
         with database_connector(args.database_url) as database:
             if args.command == "create":
                 portfolio_id = database.create_portfolio(
