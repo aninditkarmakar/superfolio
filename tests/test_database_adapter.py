@@ -562,6 +562,7 @@ class DatabaseAdapterTests(unittest.TestCase):
         )
 
         self.assertEqual(membership_id, "membership-uuid")
+        self.assertEqual(connection.commit_count, 1)
         sql, params = connection.cursor_instance.executed[0]
         self.assertIn("public.attach_portfolio_account", sql)
         self.assertEqual(params, ("All Accounts", "IBKR", "U100"))
@@ -620,6 +621,10 @@ class DatabaseAdapterTests(unittest.TestCase):
                 PortfolioSummary("IBKR Only", "USD", False),
             ],
         )
+        sql, params = connection.cursor_instance.executed[0]
+        normalized = " ".join(sql.split())
+        self.assertIn("SELECT name, reporting_currency, is_active", normalized)
+        self.assertEqual(params, ())
 
     def test_fetch_methods_allow_absent_date_filters(self) -> None:
         connection = FakeConnection(rows=[])
