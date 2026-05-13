@@ -5,8 +5,9 @@ from pathlib import Path
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-REVERT_SCHEMA = REPO_ROOT / "migrations" / "revert" / "create_mvp_schema.sql"
-VERIFY_SCHEMA = REPO_ROOT / "migrations" / "verify" / "create_mvp_schema.sql"
+MIGRATIONS_DIR = REPO_ROOT / "migrations"
+REVERT_SCHEMA = MIGRATIONS_DIR / "revert" / "create_mvp_schema.sql"
+VERIFY_SCHEMA = MIGRATIONS_DIR / "verify" / "create_mvp_schema.sql"
 
 ACCOUNT_SCOPED_START_INGESTION_RUN_SIGNATURE = (
     "public.start_ingestion_run(TEXT, TEXT, TEXT, DATE, DATE, TEXT)"
@@ -30,6 +31,22 @@ class MigrationContractTests(unittest.TestCase):
         self.assertIn(
             "'public.start_ingestion_run(text,text,text,date,date,text)'",
             sql,
+        )
+
+    def test_portfolio_layer_migration_files_exist(self) -> None:
+        migration_name = "create_portfolio_layer.sql"
+
+        self.assertTrue((MIGRATIONS_DIR / "deploy" / migration_name).exists())
+        self.assertTrue((MIGRATIONS_DIR / "revert" / migration_name).exists())
+        self.assertTrue((MIGRATIONS_DIR / "verify" / migration_name).exists())
+
+    def test_portfolio_layer_migration_is_in_sqitch_plan(self) -> None:
+        plan_text = (MIGRATIONS_DIR / "sqitch.plan").read_text()
+
+        self.assertIn("create_portfolio_layer", plan_text)
+        self.assertLess(
+            plan_text.index("create_mvp_schema"),
+            plan_text.index("create_portfolio_layer"),
         )
 
 
