@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import unittest
+from collections import Counter
 from dataclasses import FrozenInstanceError
 from datetime import date
 from decimal import Decimal
@@ -131,7 +132,7 @@ class PortfolioModelTests(unittest.TestCase):
             )
 
 
-from portfolio_engine.portfolio_twr import PortfolioTwrError, calculate_portfolio_twr
+from portfolio_engine.portfolio_twr import PortfolioTwrError, calculate_portfolio_twr, missing_nav_counts
 
 
 def _malformed_portfolio_daily_input(
@@ -225,6 +226,7 @@ class PortfolioTwrCalculationTests(unittest.TestCase):
 
         self.assertEqual(rows[-1].ending_nav_base, Decimal("101"))
         self.assertEqual(rows[-1].missing_nav_accounts, ("IBKR:UUS",))
+        self.assertEqual(missing_nav_counts(rows), Counter({"IBKR:UUS": 1}))
 
     def test_explicit_zero_nav_is_not_missing(self) -> None:
         rows = calculate_portfolio_twr(
@@ -376,6 +378,31 @@ class PortfolioTwrCalculationTests(unittest.TestCase):
                 ],
             )
 
+    def test_adjacent_bridges_for_same_account_pair_do_not_overlap(self) -> None:
+        rows = calculate_portfolio_twr(
+            reporting_currency="USD",
+            accounts=[self.ca, self.us],
+            nav_inputs=[
+                PortfolioDailyInput(self.ca, date(2026, 1, 1), Decimal("100"), "USD"),
+                PortfolioDailyInput(self.us, date(2026, 1, 1), Decimal("0"), "USD"),
+                PortfolioDailyInput(self.ca, date(2026, 1, 2), Decimal("0"), "USD"),
+                PortfolioDailyInput(self.us, date(2026, 1, 2), Decimal("0"), "USD"),
+                PortfolioDailyInput(self.ca, date(2026, 1, 3), Decimal("0"), "USD"),
+                PortfolioDailyInput(self.us, date(2026, 1, 3), Decimal("0"), "USD"),
+                PortfolioDailyInput(self.ca, date(2026, 1, 4), Decimal("0"), "USD"),
+                PortfolioDailyInput(self.us, date(2026, 1, 4), Decimal("100"), "USD"),
+            ],
+            cash_flows=[],
+            transfer_bridges=[
+                TransferBridge(self.ca, self.us, date(2026, 1, 1), date(2026, 1, 3), Decimal("100"), "USD"),
+                TransferBridge(self.ca, self.us, date(2026, 1, 2), date(2026, 1, 4), Decimal("100"), "USD"),
+            ],
+        )
+
+        by_date = {row.report_date: row for row in rows}
+        self.assertEqual(by_date[date(2026, 1, 2)].bridge_value_base, Decimal("100"))
+        self.assertEqual(by_date[date(2026, 1, 3)].bridge_value_base, Decimal("100"))
+
     def test_cash_flow_after_last_nav_date_fails(self) -> None:
         with self.assertRaisesRegex(PortfolioTwrError, r"cash-flow record\(s\) fell outside the NAV date range"):
             calculate_portfolio_twr(
@@ -402,6 +429,22 @@ class PortfolioTwrCalculationTests(unittest.TestCase):
                 ],
                 cash_flows=[
                     PortfolioCashFlow(self.ca, date(2026, 1, 1), Decimal("50"), "USD"),
+                ],
+                transfer_bridges=[],
+            )
+
+    def test_cash_flow_before_first_nav_date_counts_all_bad_flows(self) -> None:
+        with self.assertRaisesRegex(PortfolioTwrError, r"2 cash-flow record\(s\) fell outside the NAV date range"):
+            calculate_portfolio_twr(
+                reporting_currency="USD",
+                accounts=[self.ca],
+                nav_inputs=[
+                    PortfolioDailyInput(self.ca, date(2026, 1, 3), Decimal("100"), "USD"),
+                    PortfolioDailyInput(self.ca, date(2026, 1, 4), Decimal("105"), "USD"),
+                ],
+                cash_flows=[
+                    PortfolioCashFlow(self.ca, date(2026, 1, 1), Decimal("50"), "USD"),
+                    PortfolioCashFlow(self.ca, date(2026, 1, 2), Decimal("25"), "USD"),
                 ],
                 transfer_bridges=[],
             )
