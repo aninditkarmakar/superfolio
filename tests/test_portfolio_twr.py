@@ -134,6 +134,25 @@ class PortfolioModelTests(unittest.TestCase):
 from portfolio_engine.portfolio_twr import PortfolioTwrError, calculate_portfolio_twr
 
 
+def _malformed_portfolio_daily_input(
+    account: AccountRef,
+    report_date: date,
+    nav_base: Decimal,
+    nav_currency: str,
+) -> PortfolioDailyInput:
+    """Construct a PortfolioDailyInput bypassing __post_init__ validation.
+
+    Only for defensive testing of the calculation layer against bad data that
+    could arrive from unsafe callers (e.g. raw DB reads, pickle, etc.).
+    """
+    value = object.__new__(PortfolioDailyInput)
+    object.__setattr__(value, "account", account)
+    object.__setattr__(value, "report_date", report_date)
+    object.__setattr__(value, "nav_base", nav_base)
+    object.__setattr__(value, "nav_currency", nav_currency)
+    return value
+
+
 class PortfolioTwrCalculationTests(unittest.TestCase):
     def setUp(self) -> None:
         self.ca = AccountRef("IBKR", "UCA", "USD", "Canada")
@@ -223,6 +242,23 @@ class PortfolioTwrCalculationTests(unittest.TestCase):
         self.assertEqual(rows[0].missing_nav_accounts, ())
 
     def test_mixed_nav_currency_fails(self) -> None:
+        with self.assertRaisesRegex(PortfolioTwrError, "NAV currency CAD"):
+            calculate_portfolio_twr(
+                reporting_currency="USD",
+                accounts=[self.ca],
+                nav_inputs=[
+                    _malformed_portfolio_daily_input(
+                        self.ca,
+                        date(2026, 1, 1),
+                        Decimal("100"),
+                        "CAD",
+                    ),
+                ],
+                cash_flows=[],
+                transfer_bridges=[],
+            )
+
+    def test_mixed_account_currency_fails(self) -> None:
         cad_account = AccountRef("IBKR", "UCAD", "CAD", "CAD account")
         with self.assertRaisesRegex(PortfolioTwrError, "Account IBKR:UCAD base currency CAD"):
             calculate_portfolio_twr(

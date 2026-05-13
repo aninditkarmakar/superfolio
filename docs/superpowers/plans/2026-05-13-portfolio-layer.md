@@ -1015,16 +1015,45 @@ class PortfolioTwrCalculationTests(unittest.TestCase):
         self.assertEqual(rows[0].missing_nav_accounts, ())
 
     def test_mixed_nav_currency_fails(self) -> None:
+        # Use _malformed_portfolio_daily_input to bypass __post_init__ so we can
+        # reach the calculation-layer NAV-currency guard with a mismatched currency.
         with self.assertRaisesRegex(PortfolioTwrError, "NAV currency CAD"):
             calculate_portfolio_twr(
                 reporting_currency="USD",
                 accounts=[self.ca],
                 nav_inputs=[
-                    PortfolioDailyInput(self.ca, date(2026, 1, 1), Decimal("100"), "CAD"),
+                    _malformed_portfolio_daily_input(
+                        self.ca,
+                        date(2026, 1, 1),
+                        Decimal("100"),
+                        "CAD",
+                    ),
                 ],
                 cash_flows=[],
                 transfer_bridges=[],
             )
+
+    def test_mixed_account_currency_fails(self) -> None:
+        cad_account = AccountRef("IBKR", "UCAD", "CAD", "CAD account")
+        with self.assertRaisesRegex(PortfolioTwrError, "Account IBKR:UCAD base currency CAD"):
+            calculate_portfolio_twr(
+                reporting_currency="USD",
+                accounts=[cad_account],
+                nav_inputs=[
+                    PortfolioDailyInput(cad_account, date(2026, 1, 1), Decimal("100"), "CAD"),
+                ],
+                cash_flows=[],
+                transfer_bridges=[],
+            )
+```
+
+> **Note (2026-05-13 follow-up):** `PortfolioDailyInput.__post_init__` enforces
+> `nav_currency == account.base_currency`, so naively constructing
+> `PortfolioDailyInput(self.ca, ..., "CAD")` raises `ValueError` before
+> `calculate_portfolio_twr` is called and the calculation-layer NAV-currency guard
+> is never exercised. The private helper `_malformed_portfolio_daily_input` uses
+> `object.__new__` / `object.__setattr__` to bypass `__post_init__`, simulating
+> bad data that could arrive from unsafe callers (raw DB reads, pickle, etc.).
 ```
 
 - [ ] **Step 2: Run tests and verify failure**
