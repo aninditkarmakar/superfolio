@@ -15,7 +15,7 @@ from portfolio_engine.database import (
     SuperFolioDatabase,
     connect_database,
 )
-from portfolio_engine.models import AccountRef, CashFlow, NavSnapshot, PortfolioSummary, TransferBridge
+from portfolio_engine.models import AccountRef, CashFlow, NavSnapshot, PortfolioDailyInput, PortfolioSummary, TransferBridge
 
 
 class FakeCursor:
@@ -655,6 +655,55 @@ class DatabaseAdapterTests(unittest.TestCase):
         self.assertEqual(
             connection.cursor_instance.executed[1][1],
             ("IBKR", "U100", "Deposits/Withdrawals", None, None, None, None),
+        )
+
+    def test_fetch_portfolio_accounts_maps_rows_including_inactive_accounts(self) -> None:
+        connection = FakeConnection(
+            rows=[
+                ("IBKR", "UCA", "USD", "Canada account"),
+                ("IBKR", "UUS", "USD", "US account"),
+            ]
+        )
+        database = SuperFolioDatabase(connection)
+
+        accounts = database.fetch_portfolio_accounts("All Accounts")
+
+        self.assertEqual(
+            accounts,
+            [
+                AccountRef("IBKR", "UCA", "USD", "Canada account"),
+                AccountRef("IBKR", "UUS", "USD", "US account"),
+            ],
+        )
+        sql, params = connection.cursor_instance.executed[0]
+        self.assertIn("portfolio_accounts", sql)
+        self.assertNotIn("a.is_active = true", sql)
+        self.assertEqual(params, ("All Accounts",))
+
+    def test_fetch_portfolio_nav_inputs_maps_currency_aware_rows(self) -> None:
+        connection = FakeConnection(
+            rows=[
+                ("IBKR", "UCA", "USD", "Canada account", date(2026, 1, 2), Decimal("100.00"), "USD"),
+            ]
+        )
+        database = SuperFolioDatabase(connection)
+
+        inputs = database.fetch_portfolio_nav_inputs(
+            portfolio_name="All Accounts",
+            start_date=date(2026, 1, 1),
+            end_date=date(2026, 1, 31),
+        )
+
+        self.assertEqual(
+            inputs,
+            [
+                PortfolioDailyInput(
+                    AccountRef("IBKR", "UCA", "USD", "Canada account"),
+                    date(2026, 1, 2),
+                    Decimal("100.00"),
+                    "USD",
+                )
+            ],
         )
 
 
