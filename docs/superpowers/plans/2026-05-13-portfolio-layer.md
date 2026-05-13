@@ -523,6 +523,43 @@ class PortfolioModelTests(unittest.TestCase):
                 currency="USD",
             )
 
+    def test_portfolio_daily_input_rejects_currency_mismatch(self) -> None:
+        account = AccountRef("IBKR", "U100", "USD", None)
+
+        with self.assertRaisesRegex(ValueError, "NAV currency"):
+            PortfolioDailyInput(
+                account=account,
+                report_date=date(2026, 1, 2),
+                nav_base=Decimal("100.00"),
+                nav_currency="CAD",
+            )
+
+    def test_transfer_bridge_rejects_non_positive_value(self) -> None:
+        account = AccountRef("IBKR", "U100", "USD", None)
+
+        with self.assertRaisesRegex(ValueError, "transfer bridge value must be positive"):
+            TransferBridge(
+                source_account=account,
+                destination_account=AccountRef("IBKR", "U200", "USD", None),
+                departure_date=date(2026, 1, 2),
+                arrival_date=date(2026, 1, 4),
+                value=Decimal("0"),
+                currency="USD",
+            )
+
+    def test_transfer_bridge_rejects_same_source_and_destination(self) -> None:
+        account = AccountRef("IBKR", "U100", "USD", None)
+
+        with self.assertRaisesRegex(ValueError, "source and destination accounts must differ"):
+            TransferBridge(
+                source_account=account,
+                destination_account=account,
+                departure_date=date(2026, 1, 2),
+                arrival_date=date(2026, 1, 4),
+                value=Decimal("50.00"),
+                currency="USD",
+            )
+
 
 if __name__ == "__main__":
     unittest.main()
@@ -585,6 +622,13 @@ class PortfolioDailyInput:
     nav_base: Decimal
     nav_currency: str
 
+    def __post_init__(self) -> None:
+        if self.nav_currency != self.account.base_currency:
+            raise ValueError(
+                f"NAV currency {self.nav_currency} does not match "
+                f"account base currency {self.account.base_currency}"
+            )
+
 
 @dataclass(frozen=True)
 class TransferBridge:
@@ -597,8 +641,12 @@ class TransferBridge:
     note: str | None = None
 
     def __post_init__(self) -> None:
+        if self.source_account == self.destination_account:
+            raise ValueError("transfer bridge source and destination accounts must differ")
         if self.arrival_date < self.departure_date:
             raise ValueError("arrival_date must be on or after departure_date")
+        if self.value <= 0:
+            raise ValueError("transfer bridge value must be positive")
 
 
 @dataclass(frozen=True)

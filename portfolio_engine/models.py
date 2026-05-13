@@ -69,6 +69,13 @@ class PortfolioDailyInput:
     nav_base: Decimal
     nav_currency: str
 
+    def __post_init__(self) -> None:
+        if self.nav_currency != self.account.base_currency:
+            raise ValueError(
+                f"NAV currency {self.nav_currency} does not match "
+                f"account base currency {self.account.base_currency}"
+            )
+
 
 @dataclass(frozen=True)
 class TransferBridge:
@@ -81,8 +88,12 @@ class TransferBridge:
     note: str | None = None
 
     def __post_init__(self) -> None:
+        if self.source_account == self.destination_account:
+            raise ValueError("transfer bridge source and destination accounts must differ")
         if self.arrival_date < self.departure_date:
             raise ValueError("arrival_date must be on or after departure_date")
+        if self.value <= 0:
+            raise ValueError("transfer bridge value must be positive")
 
 
 @dataclass(frozen=True)
