@@ -341,6 +341,21 @@ class PortfolioTwrCalculationTests(unittest.TestCase):
                 ],
             )
 
+    def test_bridge_currency_mismatch_fails(self) -> None:
+        with self.assertRaisesRegex(PortfolioTwrError, "Bridge currency CAD"):
+            calculate_portfolio_twr(
+                reporting_currency="USD",
+                accounts=[self.ca, self.us],
+                nav_inputs=[
+                    PortfolioDailyInput(self.ca, date(2026, 1, 1), Decimal("100"), "USD"),
+                    PortfolioDailyInput(self.us, date(2026, 1, 1), Decimal("0"), "USD"),
+                ],
+                cash_flows=[],
+                transfer_bridges=[
+                    TransferBridge(self.ca, self.us, date(2026, 1, 1), date(2026, 1, 3), Decimal("100"), "CAD"),
+                ],
+            )
+
     def test_cash_flow_after_last_nav_date_fails(self) -> None:
         with self.assertRaisesRegex(PortfolioTwrError, r"cash-flow record\(s\) fell outside the NAV date range"):
             calculate_portfolio_twr(
