@@ -36,7 +36,8 @@ portfolio_engine/        # Python calculation engine (no third-party deps)
   csv_export.py          # CSV writer for daily TWR output
 
 scripts/
-  calculate_twr.py       # End-to-end CLI: Flex XML → TWR → optional CSV export
+  calculate_twr.py          # End-to-end CLI: Flex XML -> TWR -> optional CSV export
+  calculate_twr_from_db.py  # Database CLI: PostgreSQL facts -> TWR -> optional CSV export
 
 migrations/
   deploy/                # Sqitch deploy scripts
@@ -88,6 +89,33 @@ Daily output written to output/twr.csv
 | `--start-date` | *(none)* | Filter window start (`YYYY-MM-DD`) |
 | `--end-date` | *(none)* | Filter window end (`YYYY-MM-DD`) |
 | `--daily-output` | *(none)* | Optional CSV path for daily TWR rows |
+
+### Running the database-backed TWR CLI
+
+After registering an account and loading Flex XML records into PostgreSQL, calculate TWR from normalized database facts:
+
+```bash
+python scripts/calculate_twr_from_db.py \
+  --brokerage-code IBKR \
+  --account-external-id U100 \
+  --start-date 2026-01-01 \
+  --end-date 2026-01-31 \
+  --daily-output output/twr.csv
+```
+
+The command uses `DATABASE_URL` by default. Pass `--database-url` to override it for one run. It calculates one selected brokerage account at a time, reads daily NAV snapshots and Deposits/Withdrawals cash flows from the database, and writes the same optional daily CSV schema as `scripts/calculate_twr.py`.
+
+### Database-backed CLI Options
+
+| Flag | Default | Description |
+| :--- | :--- | :--- |
+| `--brokerage-code` | required | Brokerage code for the selected account, for example `IBKR`. |
+| `--account-external-id` | required | Brokerage account id to calculate. |
+| `--database-url` | `DATABASE_URL` | Optional database URL override. |
+| `--flow-timing` | `start` | Return convention: `start` = flow at beginning of period; `end` = flow at end. |
+| `--start-date` | none | Filter window start (`YYYY-MM-DD`). |
+| `--end-date` | none | Filter window end (`YYYY-MM-DD`). |
+| `--daily-output` | none | Optional CSV path for daily TWR rows. |
 
 ### Flex XML Record Types Used
 

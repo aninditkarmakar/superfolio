@@ -1,6 +1,8 @@
 # TWR Calculation Workflow
 
-Use `scripts/calculate_twr.py` to calculate daily linked time-weighted return from local IBKR Flex XML reports. This workflow is file-based and does not write to PostgreSQL.
+SuperFolio supports two TWR calculation workflows:
+- `scripts/calculate_twr.py` calculates daily linked TWR from local IBKR Flex XML reports and does not query PostgreSQL.
+- `scripts/calculate_twr_from_db.py` calculates daily linked TWR from normalized PostgreSQL facts for one selected brokerage account.
 
 ## Inputs
 
@@ -35,6 +37,19 @@ python scripts/calculate_twr.py \
 | `--end-date` | none | Inclusive date filter in `YYYY-MM-DD` format. |
 | `--daily-output` | none | Optional CSV path for daily rows. |
 
+## Database-backed command
+
+```bash
+python scripts/calculate_twr_from_db.py \
+  --brokerage-code IBKR \
+  --account-external-id U100 \
+  --start-date 2026-01-01 \
+  --end-date 2026-01-31 \
+  --daily-output output/twr.csv
+```
+
+The database-backed command uses `DATABASE_URL` by default and accepts `--database-url` for a one-run override. It reads `daily_nav_snapshots` and only `cash_flows` rows whose `cash_flow_type` is `Deposits/Withdrawals`. It does not accept a cash-flow type option.
+
 ## Cash-flow alignment
 
 The engine aligns each cash flow to the first NAV date on or after the flow effective date. Cash flows after the final NAV date are dropped and reported as a warning.
@@ -63,6 +78,6 @@ When `--daily-output` is provided, the CSV contains one row per NAV snapshot wit
 
 ## Current limits
 
-- The standalone TWR CLI reads local XML files and does not query the database.
+- The XML TWR CLI reads local XML files and does not query the database; use `calculate_twr_from_db.py` after records have been loaded into PostgreSQL.
 - The parser uses base-currency values from Flex XML and does not fetch external FX rates.
 - Holdings, attribution, and benchmark comparison are not implemented in this workflow.
