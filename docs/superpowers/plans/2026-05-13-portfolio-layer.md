@@ -1081,12 +1081,14 @@ from decimal import Decimal
 
 from .models import (
     AccountRef,
+    CashFlow,
+    NavSnapshot,
     PortfolioCashFlow,
     PortfolioDailyInput,
     PortfolioTwrRow,
     TransferBridge,
 )
-from .twr import calculate_twr
+from .twr import align_flows_to_nav_dates, calculate_twr
 from .models import NavSnapshot
 
 
@@ -1126,17 +1128,18 @@ def calculate_portfolio_twr(
     if not nav_by_date_account:
         raise PortfolioTwrError("No NAV snapshots found for the selected portfolio and date range.")
 
-    flows_by_date: defaultdict[date, Decimal] = defaultdict(Decimal)
+    aligned_flow_inputs: list[CashFlow] = []
     for flow in cash_flows:
         if flow.base_currency.upper() != normalized_reporting_currency:
             raise PortfolioTwrError(
                 f"Cash-flow currency {flow.base_currency} for {flow.account.label} does not match "
                 f"portfolio reporting currency {normalized_reporting_currency}."
             )
-        flows_by_date[flow.effective_date] += flow.amount_base
+        aligned_flow_inputs.append(CashFlow(flow.effective_date, flow.amount_base))
 
     bridge_value_by_date: defaultdict[date, Decimal] = defaultdict(Decimal)
     nav_dates = sorted(nav_by_date_account)
+    flows_by_date, _dropped_flow_count = align_flows_to_nav_dates(aligned_flow_inputs, nav_dates)
     for bridge in transfer_bridges:
         if bridge.currency.upper() != normalized_reporting_currency:
             raise PortfolioTwrError(
@@ -1163,7 +1166,7 @@ def calculate_portfolio_twr(
 
     twr_rows = calculate_twr(
         portfolio_snapshots,
-        dict(flows_by_date),
+        flows_by_date,
         flow_timing=flow_timing,
     )
 
@@ -1189,6 +1192,16 @@ def missing_nav_counts(rows: list[PortfolioTwrRow]) -> Counter[str]:
 ```
 
 - [ ] **Step 4: Run tests and commit**
+
+> **Follow-up fix (flow alignment):** The original implementation aggregated cash flows by raw
+> `effective_date` and passed them directly to `calculate_twr`. `calculate_twr` only consumes flows
+> whose date exactly equals a NAV snapshot date, so flows between snapshot dates were silently
+> ignored. The fix imports `CashFlow` and `align_flows_to_nav_dates` from `.models` / `.twr`,
+> converts validated portfolio flows to `CashFlow` objects, then calls
+> `align_flows_to_nav_dates(aligned_flow_inputs, nav_dates)` before `calculate_twr`, matching the
+> single-account path in `db_twr.py`. `_dropped_flow_count` intentionally captures the dropped-
+> flow count without surfacing it (a future CLI task may expose it).
+> The regression test `test_cash_flow_between_nav_dates_aligns_to_next_nav_date` covers this case.
 
 Run:
 

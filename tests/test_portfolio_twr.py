@@ -258,6 +258,23 @@ class PortfolioTwrCalculationTests(unittest.TestCase):
                 transfer_bridges=[],
             )
 
+    def test_cash_flow_between_nav_dates_aligns_to_next_nav_date(self) -> None:
+        rows = calculate_portfolio_twr(
+            reporting_currency="USD",
+            accounts=[self.ca],
+            nav_inputs=[
+                PortfolioDailyInput(self.ca, date(2026, 1, 1), Decimal("100"), "USD"),
+                PortfolioDailyInput(self.ca, date(2026, 1, 3), Decimal("105"), "USD"),
+            ],
+            cash_flows=[
+                PortfolioCashFlow(self.ca, date(2026, 1, 2), Decimal("10"), "USD"),
+            ],
+            transfer_bridges=[],
+        )
+
+        self.assertEqual(rows[-1].net_cash_flow_base, Decimal("10"))
+        self.assertEqual(rows[-1].period_return, Decimal("-0.0454545454545454545454545455"))
+
     def test_mixed_account_currency_fails(self) -> None:
         cad_account = AccountRef("IBKR", "UCAD", "CAD", "CAD account")
         with self.assertRaisesRegex(PortfolioTwrError, "Account IBKR:UCAD base currency CAD"):
