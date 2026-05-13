@@ -76,6 +76,7 @@ class PortfolioCliTests(unittest.TestCase):
         self.assertEqual(exit_code, 0)
         self.assertEqual(database.created, [("All Accounts", "USD")])
         self.assertIn("Created portfolio: portfolio-uuid", stdout.getvalue())
+        self.assertEqual(database.close_count, 1)
 
     def test_attach_account(self) -> None:
         from portfolio_engine.portfolio_cli import run
@@ -91,6 +92,138 @@ class PortfolioCliTests(unittest.TestCase):
 
         self.assertEqual(exit_code, 0)
         self.assertEqual(database.attached, [("All Accounts", "IBKR", "U100")])
+        self.assertEqual(database.close_count, 1)
+
+    def test_list_portfolios(self) -> None:
+        from portfolio_engine.portfolio_cli import run
+
+        database = FakePortfolioDatabase()
+        stdout = io.StringIO()
+
+        exit_code = run(
+            ["list"],
+            database_connector=FakeFactory(database),
+            stdout=stdout,
+            stderr=io.StringIO(),
+        )
+
+        self.assertEqual(exit_code, 0)
+        self.assertIn("All Accounts\tUSD\tTrue", stdout.getvalue())
+        self.assertEqual(database.close_count, 1)
+
+    def test_show_portfolio_accounts(self) -> None:
+        from portfolio_engine.portfolio_cli import run
+
+        database = FakePortfolioDatabase()
+        stdout = io.StringIO()
+
+        exit_code = run(
+            ["show", "--portfolio-name", "All Accounts"],
+            database_connector=FakeFactory(database),
+            stdout=stdout,
+            stderr=io.StringIO(),
+        )
+
+        self.assertEqual(exit_code, 0)
+        self.assertIn("IBKR:U100\tUSD\tMain", stdout.getvalue())
+        self.assertEqual(database.close_count, 1)
+
+    def test_create_bridge(self) -> None:
+        from portfolio_engine.portfolio_cli import run
+
+        database = FakePortfolioDatabase()
+        stdout = io.StringIO()
+
+        exit_code = run(
+            [
+                "create-bridge",
+                "--portfolio-name", "All Accounts",
+                "--source-brokerage-code", "IBKR",
+                "--source-account-external-id", "U100",
+                "--destination-brokerage-code", "IBKR",
+                "--destination-account-external-id", "U200",
+                "--departure-date", "2024-01-15",
+                "--arrival-date", "2024-01-20",
+                "--value", "50000.00",
+                "--currency", "USD",
+            ],
+            database_connector=FakeFactory(database),
+            stdout=stdout,
+            stderr=io.StringIO(),
+        )
+
+        self.assertEqual(exit_code, 0)
+        self.assertIn("Created transfer bridge: bridge-uuid", stdout.getvalue())
+        self.assertEqual(len(database.bridges), 1)
+        bridge_kwargs = database.bridges[0]
+        self.assertEqual(bridge_kwargs["portfolio_name"], "All Accounts")
+        self.assertEqual(bridge_kwargs["source_brokerage_code"], "IBKR")
+        self.assertEqual(bridge_kwargs["source_account_external_id"], "U100")
+        self.assertEqual(bridge_kwargs["destination_brokerage_code"], "IBKR")
+        self.assertEqual(bridge_kwargs["destination_account_external_id"], "U200")
+        self.assertEqual(bridge_kwargs["departure_date"], date(2024, 1, 15))
+        self.assertEqual(bridge_kwargs["arrival_date"], date(2024, 1, 20))
+        self.assertEqual(bridge_kwargs["value"], Decimal("50000.00"))
+        self.assertEqual(bridge_kwargs["currency"], "USD")
+        self.assertIsNone(bridge_kwargs["note"])
+        self.assertEqual(database.close_count, 1)
+
+    def test_list_bridges(self) -> None:
+        from portfolio_engine.portfolio_cli import run
+
+        source = AccountRef("IBKR", "U100", "USD", "Source Account")
+        destination = AccountRef("IBKR", "U200", "USD", "Dest Account")
+        bridge = TransferBridge(
+            source_account=source,
+            destination_account=destination,
+            departure_date=date(2024, 1, 15),
+            arrival_date=date(2024, 1, 20),
+            value=Decimal("50000.00"),
+            currency="USD",
+            note="Transfer note",
+        )
+        database = FakePortfolioDatabase()
+        database.transfer_bridges = [bridge]
+        stdout = io.StringIO()
+
+        exit_code = run(
+            ["list-bridges", "--portfolio-name", "All Accounts"],
+            database_connector=FakeFactory(database),
+            stdout=stdout,
+            stderr=io.StringIO(),
+        )
+
+        self.assertEqual(exit_code, 0)
+        output = stdout.getvalue()
+        self.assertIn("IBKR:U100->IBKR:U200", output)
+        self.assertIn("2024-01-15..2024-01-20", output)
+        self.assertIn("50000.00 USD", output)
+        self.assertIn("Transfer note", output)
+        self.assertEqual(database.close_count, 1)
+
+    def test_database_error_returns_one_and_closes(self) -> None:
+        from portfolio_engine.portfolio_cli import run
+
+        database = FakePortfolioDatabase()
+
+        def _raise() -> list:
+            raise RuntimeError("boom")
+
+        database.list_portfolios = _raise  # type: ignore[method-assign]
+        stdout = io.StringIO()
+        stderr = io.StringIO()
+
+        exit_code = run(
+            ["list"],
+            database_connector=FakeFactory(database),
+            stdout=stdout,
+            stderr=stderr,
+        )
+
+        self.assertEqual(exit_code, 1)
+        self.assertIn("Error: boom", stderr.getvalue())
+        self.assertEqual(stdout.getvalue(), "")
+        self.assertEqual(database.close_count, 1)
 
     def test_script_wrapper_imports_main(self) -> None:
         import scripts.manage_portfolio as manage_portfolio_script
