@@ -168,6 +168,10 @@ BEGIN
     FROM public.portfolios
     WHERE name = v_name;
 
+    IF v_portfolio_id IS NULL THEN
+        RAISE EXCEPTION 'Portfolio % disappeared after conflict', v_name;
+    END IF;
+
     IF v_existing_reporting_currency <> v_reporting_currency THEN
         RAISE EXCEPTION 'Portfolio % already exists with reporting_currency %',
             v_name,
@@ -253,6 +257,9 @@ BEGIN
     END IF;
     IF p_value IS NULL OR p_value <= 0 THEN
         RAISE EXCEPTION 'Bridge value must be positive';
+    END IF;
+    IF p_currency IS NULL OR btrim(p_currency) = '' THEN
+        RAISE EXCEPTION 'Bridge currency must not be NULL or blank';
     END IF;
     IF upper(btrim(p_currency)) <> v_reporting_currency THEN
         RAISE EXCEPTION 'Bridge currency % does not match portfolio reporting currency %',

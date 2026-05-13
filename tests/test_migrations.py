@@ -102,6 +102,23 @@ class MigrationContractTests(unittest.TestCase):
             sql,
         )
 
+    def test_create_portfolio_guards_missing_row_after_conflict(self) -> None:
+        sql = PORTFOLIO_LAYER_DEPLOY.read_text(encoding="utf-8")
+
+        self.assertIn("Portfolio % disappeared after conflict", sql)
+        disappeared_pos = sql.index("Portfolio % disappeared after conflict")
+        exists_pos = sql.index("already exists with reporting_currency")
+        self.assertLess(disappeared_pos, exists_pos)
+
+    def test_transfer_bridge_validates_blank_currency_before_comparison(self) -> None:
+        sql = PORTFOLIO_LAYER_DEPLOY.read_text(encoding="utf-8")
+
+        self.assertIn("p_currency IS NULL OR btrim(p_currency) = ''", sql)
+        self.assertIn("Bridge currency must not be NULL or blank", sql)
+        null_check_pos = sql.index("p_currency IS NULL OR btrim(p_currency) = ''")
+        mismatch_pos = sql.index("upper(btrim(p_currency)) <> v_reporting_currency")
+        self.assertLess(null_check_pos, mismatch_pos)
+
 
 if __name__ == "__main__":
     unittest.main()
