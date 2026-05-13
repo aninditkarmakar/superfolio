@@ -1,10 +1,14 @@
 from __future__ import annotations
 
+import tempfile
 import unittest
 from collections import Counter
 from dataclasses import FrozenInstanceError
 from datetime import date
 from decimal import Decimal
+from pathlib import Path
+
+from portfolio_engine.csv_export import write_portfolio_daily_twr_csv
 
 from portfolio_engine.models import (
     AccountRef,
@@ -473,6 +477,30 @@ class PortfolioTwrCalculationTests(unittest.TestCase):
                 ],
                 cash_flows=[],
                 transfer_bridges=[],
+            )
+
+
+    def test_write_portfolio_daily_twr_csv(self) -> None:
+        rows = [
+            PortfolioTwrRow(
+                report_date=date(2026, 1, 2),
+                ending_nav_base=Decimal("100.00"),
+                net_cash_flow_base=Decimal("0"),
+                bridge_value_base=Decimal("50.00"),
+                missing_nav_accounts=("IBKR:UUS",),
+                period_return=None,
+                cumulative_twr=Decimal("0"),
+            )
+        ]
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "portfolio.csv"
+            write_portfolio_daily_twr_csv(path, rows)
+
+            self.assertEqual(
+                path.read_text().strip(),
+                "date,ending_nav_base,net_cash_flow_base,bridge_value_base,missing_nav_accounts,period_return,cumulative_twr\n"
+                "2026-01-02,100.00,0,50.00,IBKR:UUS,,0",
             )
 
 
