@@ -15,7 +15,7 @@ from portfolio_engine.database import (
     SuperFolioDatabase,
     connect_database,
 )
-from portfolio_engine.models import CashFlow, NavSnapshot
+from portfolio_engine.models import AccountRef, CashFlow, NavSnapshot, PortfolioSummary, TransferBridge
 
 
 class FakeCursor:
@@ -535,6 +535,91 @@ class DatabaseAdapterTests(unittest.TestCase):
 
         self.assertEqual(connection.commit_count, 0)
         self.assertEqual(connection.rollback_count, 1)
+
+    def test_create_portfolio_calls_database_function(self) -> None:
+        connection = FakeConnection(row=("portfolio-uuid",))
+        database = SuperFolioDatabase(connection)
+
+        portfolio_id = database.create_portfolio(
+            name="All Accounts",
+            reporting_currency="USD",
+        )
+
+        self.assertEqual(portfolio_id, "portfolio-uuid")
+        sql, params = connection.cursor_instance.executed[0]
+        self.assertIn("public.create_portfolio", sql)
+        self.assertEqual(params, ("All Accounts", "USD"))
+        self.assertEqual(connection.commit_count, 1)
+
+    def test_attach_portfolio_account_calls_database_function(self) -> None:
+        connection = FakeConnection(row=("membership-uuid",))
+        database = SuperFolioDatabase(connection)
+
+        membership_id = database.attach_portfolio_account(
+            portfolio_name="All Accounts",
+            brokerage_code="IBKR",
+            account_external_id="U100",
+        )
+
+        self.assertEqual(membership_id, "membership-uuid")
+        sql, params = connection.cursor_instance.executed[0]
+        self.assertIn("public.attach_portfolio_account", sql)
+        self.assertEqual(params, ("All Accounts", "IBKR", "U100"))
+
+    def test_create_transfer_bridge_calls_database_function(self) -> None:
+        connection = FakeConnection(row=("bridge-uuid",))
+        database = SuperFolioDatabase(connection)
+
+        bridge_id = database.create_portfolio_transfer_bridge(
+            portfolio_name="All Accounts",
+            source_brokerage_code="IBKR",
+            source_account_external_id="U100",
+            destination_brokerage_code="IBKR",
+            destination_account_external_id="U200",
+            departure_date=date(2026, 1, 2),
+            arrival_date=date(2026, 1, 4),
+            value=Decimal("5000.00"),
+            currency="USD",
+            note="relocation",
+        )
+
+        self.assertEqual(bridge_id, "bridge-uuid")
+        sql, params = connection.cursor_instance.executed[0]
+        self.assertIn("public.create_portfolio_transfer_bridge", sql)
+        self.assertEqual(
+            params,
+            (
+                "All Accounts",
+                "IBKR",
+                "U100",
+                "IBKR",
+                "U200",
+                date(2026, 1, 2),
+                date(2026, 1, 4),
+                Decimal("5000.00"),
+                "USD",
+                "relocation",
+            ),
+        )
+
+    def test_list_portfolios_maps_rows(self) -> None:
+        connection = FakeConnection(
+            rows=[
+                ("All Accounts", "USD", True),
+                ("IBKR Only", "USD", False),
+            ]
+        )
+        database = SuperFolioDatabase(connection)
+
+        portfolios = database.list_portfolios()
+
+        self.assertEqual(
+            portfolios,
+            [
+                PortfolioSummary("All Accounts", "USD", True),
+                PortfolioSummary("IBKR Only", "USD", False),
+            ],
+        )
 
     def test_fetch_methods_allow_absent_date_filters(self) -> None:
         connection = FakeConnection(rows=[])

@@ -8,7 +8,13 @@ from datetime import date
 from decimal import Decimal
 from typing import Any, Protocol
 
-from portfolio_engine.models import CashFlow, NavSnapshot
+from portfolio_engine.models import (
+    AccountRef,
+    CashFlow,
+    NavSnapshot,
+    PortfolioSummary,
+    TransferBridge,
+)
 
 
 class DatabaseConfigurationError(RuntimeError):
@@ -126,6 +132,79 @@ class SuperFolioDatabase:
             (ingestion_run_id, _jsonb(records)),
         )
         return _bulk_summary_from_row(row)
+
+    def create_portfolio(self, *, name: str, reporting_currency: str) -> str:
+        row = self._fetch_one(
+            "SELECT public.create_portfolio(%s, %s)",
+            (name, reporting_currency),
+        )
+        return str(row[0])
+
+    def attach_portfolio_account(
+        self,
+        *,
+        portfolio_name: str,
+        brokerage_code: str,
+        account_external_id: str,
+    ) -> str:
+        row = self._fetch_one(
+            "SELECT public.attach_portfolio_account(%s, %s, %s)",
+            (portfolio_name, brokerage_code, account_external_id),
+        )
+        return str(row[0])
+
+    def create_portfolio_transfer_bridge(
+        self,
+        *,
+        portfolio_name: str,
+        source_brokerage_code: str,
+        source_account_external_id: str,
+        destination_brokerage_code: str,
+        destination_account_external_id: str,
+        departure_date: date,
+        arrival_date: date,
+        value: Decimal,
+        currency: str,
+        note: str | None,
+    ) -> str:
+        row = self._fetch_one(
+            """
+            SELECT public.create_portfolio_transfer_bridge(
+                %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+            )
+            """,
+            (
+                portfolio_name,
+                source_brokerage_code,
+                source_account_external_id,
+                destination_brokerage_code,
+                destination_account_external_id,
+                departure_date,
+                arrival_date,
+                value,
+                currency,
+                note,
+            ),
+        )
+        return str(row[0])
+
+    def list_portfolios(self) -> list[PortfolioSummary]:
+        rows = self._fetch_all(
+            """
+            SELECT name, reporting_currency, is_active
+            FROM portfolios
+            ORDER BY name
+            """,
+            (),
+        )
+        return [
+            PortfolioSummary(
+                name=str(row[0]),
+                reporting_currency=str(row[1]),
+                is_active=bool(row[2]),
+            )
+            for row in rows
+        ]
 
     def fetch_nav_snapshots(
         self,
