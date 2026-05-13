@@ -13,6 +13,7 @@ The design must also support future multi-account comparison views and brokerage
 - Calculate portfolio-level daily TWR from existing account NAV and cash-flow facts.
 - Treat missing account NAV as zero with warnings, while preserving explicit zero NAV as valid data.
 - Support explicit in-transit transfer bridge adjustments for multi-day internal transfer gaps.
+- Preserve inactive legacy account history when an inactive account is attached to a portfolio.
 - Keep the first version CLI-managed and compatible with the current Python/PostgreSQL architecture.
 
 ## Non-goals
@@ -22,6 +23,7 @@ The design must also support future multi-account comparison views and brokerage
 - No position-level transfer valuation or security price ingestion.
 - No account membership date windows in the first version.
 - No expansion of supported external cash-flow types beyond the current `Deposits/Withdrawals` behavior.
+- No special handling for zero or undefined portfolio-level TWR periods until a real-world use case requires it.
 
 ## Portfolio model
 
@@ -30,6 +32,8 @@ Add a portfolio layer that stores saved calculation/view definitions. A portfoli
 Accounts can belong to multiple portfolios. This allows views such as "all accounts", "public taxable portfolio", "IBKR-only", or "Canada+US relocation history" to share the same underlying account facts without duplicating ingestion.
 
 Membership has no date window in the first version. If an account belongs to a portfolio, its entire available NAV and supported cash-flow history contributes whenever the calculation date range includes those records.
+
+Inactive accounts still contribute historical data when they are portfolio members. Account activity status controls whether new operational workflows should treat an account as active, but it must not remove legacy account NAV from portfolio history.
 
 ## Portfolio daily NAV and TWR
 
@@ -49,7 +53,7 @@ On each portfolio date:
 - Portfolio NAV adds any active transfer bridge value for that date.
 - Net external cash flow is the sum of supported external cash flows across member accounts.
 
-The CLI prints an aggregate portfolio TWR summary to stdout, similar to the current database-backed single-account TWR CLI. A detailed daily CSV is optional. When requested, the CSV should include portfolio NAV, net external cash flow, transfer bridge value, missing-NAV diagnostics, period return, and cumulative TWR.
+The CLI prints an aggregate portfolio TWR summary to stdout, similar to the current database-backed single-account TWR CLI. The summary must include missing-NAV warning counts grouped by portfolio member account so partially ingested account histories are visible. A detailed daily CSV is optional. When requested, the CSV should include portfolio NAV, net external cash flow, transfer bridge value, missing-NAV diagnostics, period return, and cumulative TWR.
 
 ## Transfer bridges
 
@@ -69,9 +73,11 @@ A bridge contributes to portfolio NAV only on dates strictly after the departure
 
 Transfer bridges are not cash flows. They do not affect net external flow; they only prevent artificial NAV drops while assets are in transit.
 
+Bridge source and destination accounts must both be members of the target portfolio. A bridge cannot overlap the open interval of another bridge for the same source account and destination account pair. This prevents accidentally double-counting one transfer path while still allowing distinct non-overlapping transfers between the same accounts.
+
 ## Currency behavior
 
-The first version requires every member account's stored NAV and cash-flow base values to already match the portfolio reporting currency. If any member account base currency differs from the portfolio reporting currency, portfolio TWR calculation fails with a clear unsupported-currency error.
+The first version requires every member account's stored NAV and cash-flow base values to already match the portfolio reporting currency. Portfolio TWR calculation must validate both account metadata and the actual included facts: member account `base_currency`, daily NAV snapshot `base_currency`, and cash-flow base assumptions must all be compatible with the portfolio reporting currency. If any included account or fact differs from the portfolio reporting currency, calculation fails with a clear unsupported-currency error.
 
 This keeps the first implementation correct for the IBKR use case where both account histories can be exported and loaded in USD. Daily FX tables and automatic mixed-currency conversion are future work.
 
@@ -99,12 +105,14 @@ Strict validation is required where silent math would be dangerous:
 - Empty portfolio fails.
 - Unsupported mixed-currency portfolio fails.
 - Bridge currency mismatch fails.
+- Bridge source or destination account outside the portfolio fails.
+- Bridge overlap for the same source/destination pair fails.
 - Invalid bridge date range fails.
 - No NAV data fails.
 
 Missing NAV for a member account on a portfolio date does not fail. It contributes zero and emits warnings in the CLI summary and optional CSV diagnostics.
 
-Supported external cash flows remain limited to `Deposits/Withdrawals`, matching the current implementation.
+Supported external cash flows remain limited to `Deposits/Withdrawals`, matching the current implementation. Cash-transaction classification is the responsibility of ingestion. Brokers that emit internal transfers as cash transactions must classify those records as `Transfer` instead of `Deposits/Withdrawals` before they reach portfolio TWR calculation, so internal movement does not distort external-flow-adjusted returns.
 
 ## Testing
 
@@ -114,6 +122,8 @@ Database and adapter tests should verify:
 - Account attachment.
 - One account attached to multiple portfolios.
 - Transfer bridge storage.
+- Bridge member-account validation.
+- Bridge overlap validation.
 - Duplicate handling.
 - Validation failures.
 
@@ -122,6 +132,7 @@ Calculation tests should use synthetic data for:
 - IBKR-style same-day transfer where account NAV changes offset without a bridge.
 - Multi-day transfer gap covered by a constant-value bridge.
 - Missing NAV treated as zero with warnings.
+- Missing NAV warning counts grouped by member account in the CLI summary.
 - Explicit zero NAV treated as valid data.
 - Unsupported mixed-currency calculation failure.
 - Optional daily CSV output.
