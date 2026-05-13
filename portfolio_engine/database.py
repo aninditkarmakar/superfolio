@@ -5,7 +5,10 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 from datetime import date
+from decimal import Decimal
 from typing import Any, Protocol
+
+from portfolio_engine.models import CashFlow, NavSnapshot
 
 
 class DatabaseConfigurationError(RuntimeError):
@@ -17,6 +20,7 @@ class CursorLike(Protocol):
     def __exit__(self, exc_type: object, exc: object, traceback: object) -> None: ...
     def execute(self, sql: str, params: tuple[Any, ...]) -> None: ...
     def fetchone(self) -> tuple[Any, ...] | None: ...
+    def fetchall(self) -> list[tuple[Any, ...]]: ...
 
 
 class ConnectionLike(Protocol):
@@ -123,6 +127,76 @@ class SuperFolioDatabase:
         )
         return _bulk_summary_from_row(row)
 
+    def fetch_nav_snapshots(
+        self,
+        *,
+        brokerage_code: str,
+        account_external_id: str,
+        start_date: date | None = None,
+        end_date: date | None = None,
+    ) -> list[NavSnapshot]:
+        rows = self._fetch_all(
+            """
+            SELECT d.snapshot_date, d.nav_base
+            FROM daily_nav_snapshots d
+            JOIN accounts a ON a.id = d.account_id
+            JOIN brokerages b ON b.id = a.brokerage_id
+            WHERE b.code = %s
+              AND a.external_id = %s
+              AND (%s::date IS NULL OR d.snapshot_date >= %s::date)
+              AND (%s::date IS NULL OR d.snapshot_date <= %s::date)
+            ORDER BY d.snapshot_date
+            """,
+            (
+                brokerage_code,
+                account_external_id,
+                start_date,
+                start_date,
+                end_date,
+                end_date,
+            ),
+        )
+        return [
+            NavSnapshot(report_date=row[0], total_base=Decimal(row[1]))
+            for row in rows
+        ]
+
+    def fetch_cash_flows(
+        self,
+        *,
+        brokerage_code: str,
+        account_external_id: str,
+        start_date: date | None = None,
+        end_date: date | None = None,
+    ) -> list[CashFlow]:
+        rows = self._fetch_all(
+            """
+            SELECT c.flow_date, c.amount_base
+            FROM cash_flows c
+            JOIN accounts a ON a.id = c.account_id
+            JOIN brokerages b ON b.id = a.brokerage_id
+            WHERE b.code = %s
+              AND a.external_id = %s
+              AND c.cash_flow_type = %s
+              AND (%s::date IS NULL OR c.flow_date >= %s::date)
+              AND (%s::date IS NULL OR c.flow_date <= %s::date)
+            ORDER BY c.flow_date
+            """,
+            (
+                brokerage_code,
+                account_external_id,
+                "Deposits/Withdrawals",
+                start_date,
+                start_date,
+                end_date,
+                end_date,
+            ),
+        )
+        return [
+            CashFlow(effective_date=row[0], amount_base=Decimal(row[1]))
+            for row in rows
+        ]
+
     def _fetch_one(self, sql: str, params: tuple[Any, ...]) -> tuple[Any, ...]:
         try:
             with self._connection.cursor() as cursor:
@@ -132,6 +206,17 @@ class SuperFolioDatabase:
                 raise RuntimeError("database function returned no rows")
             self._connection.commit()
             return row
+        except Exception:
+            self._connection.rollback()
+            raise
+
+    def _fetch_all(self, sql: str, params: tuple[Any, ...]) -> list[tuple[Any, ...]]:
+        try:
+            with self._connection.cursor() as cursor:
+                cursor.execute(sql, params)
+                rows = cursor.fetchall()
+            self._connection.commit()
+            return rows
         except Exception:
             self._connection.rollback()
             raise
