@@ -37,6 +37,7 @@ class FakeDatabase:
 
     def fetch_nav_snapshots(
         self,
+        *,
         brokerage_code: str,
         account_external_id: str,
         start_date: date,
@@ -56,6 +57,7 @@ class FakeDatabase:
 
     def fetch_cash_flows(
         self,
+        *,
         brokerage_code: str,
         account_external_id: str,
         start_date: date,
@@ -105,8 +107,8 @@ class DatabaseTwrCliTests(unittest.TestCase):
                 "--brokerage-code", "IBKR",
                 "--account-external-id", "U100",
                 "--database-url", "postgresql://example",
-                "--start-date", "2026-01-02",
-                "--end-date", "2026-01-03",
+                "--start-date", "2026-01-01",
+                "--end-date", "2026-01-31",
             ],
             database_connector=connector,
             stdout=stdout,
@@ -122,8 +124,8 @@ class DatabaseTwrCliTests(unittest.TestCase):
             {
                 "brokerage_code": "IBKR",
                 "account_external_id": "U100",
-                "start_date": date(2026, 1, 2),
-                "end_date": date(2026, 1, 3),
+                "start_date": date(2026, 1, 1),
+                "end_date": date(2026, 1, 31),
             },
         )
         self.assertEqual(len(database.flow_calls), 1)
@@ -132,8 +134,8 @@ class DatabaseTwrCliTests(unittest.TestCase):
             {
                 "brokerage_code": "IBKR",
                 "account_external_id": "U100",
-                "start_date": date(2026, 1, 2),
-                "end_date": date(2026, 1, 3),
+                "start_date": date(2026, 1, 1),
+                "end_date": date(2026, 1, 31),
             },
         )
         output = stdout.getvalue()
@@ -199,7 +201,7 @@ class DatabaseTwrCliTests(unittest.TestCase):
 
         self.assertEqual(exit_code, 1)
         self.assertIn(
-            "Error: No NAV snapshots found for the selected account and date range",
+            "Error: No NAV snapshots found for the selected account and date range.",
             stderr.getvalue(),
         )
 
@@ -280,8 +282,8 @@ class DatabaseTwrCliTests(unittest.TestCase):
         from portfolio_engine.db_twr import run
 
         snapshots = [
-            NavSnapshot(report_date=date(2026, 1, 2), total_base=Decimal("10000")),
-            NavSnapshot(report_date=date(2026, 1, 3), total_base=Decimal("10100")),
+            NavSnapshot(report_date=date(2026, 1, 2), total_base=Decimal("10000.00")),
+            NavSnapshot(report_date=date(2026, 1, 3), total_base=Decimal("10100.00")),
         ]
         database = FakeDatabase(snapshots=snapshots, flows=[])
         connector = FakeDatabaseConnector(database)
