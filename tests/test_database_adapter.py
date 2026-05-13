@@ -504,10 +504,37 @@ class DatabaseAdapterTests(unittest.TestCase):
         for sql, params in connection.cursor_instance.executed:
             self.assertNotIn("DROP TABLE", sql)
             self.assertNotIn("OR TRUE", sql)
+            self.assertNotIn(malicious_brokerage, sql)
             self.assertNotIn(malicious_account, sql)
             self.assertIn("%s", sql)
             self.assertIn(malicious_brokerage, params)
             self.assertIn(malicious_account, params)
+
+    def test_fetch_nav_snapshots_rolls_back_and_reraises_on_failure(self) -> None:
+        connection = FailingConnection()
+        database = SuperFolioDatabase(connection)
+
+        with self.assertRaisesRegex(RuntimeError, "database unavailable"):
+            database.fetch_nav_snapshots(
+                brokerage_code="IBKR",
+                account_external_id="U100",
+            )
+
+        self.assertEqual(connection.commit_count, 0)
+        self.assertEqual(connection.rollback_count, 1)
+
+    def test_fetch_cash_flows_rolls_back_and_reraises_on_failure(self) -> None:
+        connection = FailingConnection()
+        database = SuperFolioDatabase(connection)
+
+        with self.assertRaisesRegex(RuntimeError, "database unavailable"):
+            database.fetch_cash_flows(
+                brokerage_code="IBKR",
+                account_external_id="U100",
+            )
+
+        self.assertEqual(connection.commit_count, 0)
+        self.assertEqual(connection.rollback_count, 1)
 
     def test_fetch_methods_allow_absent_date_filters(self) -> None:
         connection = FakeConnection(rows=[])
