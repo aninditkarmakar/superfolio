@@ -139,8 +139,8 @@ class DatabaseTwrCliTests(unittest.TestCase):
             },
         )
         output = stdout.getvalue()
-        self.assertIn("Brokerage", output)
-        self.assertIn("Account", output)
+        self.assertIn("Brokerage: IBKR", output)
+        self.assertIn("Account: U100", output)
         self.assertIn("NAV snapshots: 2", output)
         self.assertIn("Cash-flow records: 1", output)
         self.assertIn("Return periods: 1", output)
