@@ -550,6 +550,7 @@ class DatabaseAdapterTests(unittest.TestCase):
         self.assertIn("public.create_portfolio", sql)
         self.assertEqual(params, ("All Accounts", "USD"))
         self.assertEqual(connection.commit_count, 1)
+        self.assertEqual(connection.rollback_count, 0)
 
     def test_attach_portfolio_account_calls_database_function(self) -> None:
         connection = FakeConnection(row=("membership-uuid",))
@@ -563,6 +564,7 @@ class DatabaseAdapterTests(unittest.TestCase):
 
         self.assertEqual(membership_id, "membership-uuid")
         self.assertEqual(connection.commit_count, 1)
+        self.assertEqual(connection.rollback_count, 0)
         sql, params = connection.cursor_instance.executed[0]
         self.assertIn("public.attach_portfolio_account", sql)
         self.assertEqual(params, ("All Accounts", "IBKR", "U100"))
@@ -585,6 +587,8 @@ class DatabaseAdapterTests(unittest.TestCase):
         )
 
         self.assertEqual(bridge_id, "bridge-uuid")
+        self.assertEqual(connection.commit_count, 1)
+        self.assertEqual(connection.rollback_count, 0)
         sql, params = connection.cursor_instance.executed[0]
         self.assertIn("public.create_portfolio_transfer_bridge", sql)
         self.assertEqual(
