@@ -163,7 +163,7 @@ DATABASE_URL=postgresql://USER:PASSWORD@HOST/neondb?sslmode=require&channel_bind
 | :--- | :--- | :--- |
 | `GITHUB_NAME` | dev container (`post-create.sh`) | Sets `git config --global user.name` inside the container |
 | `GITHUB_EMAIL` | dev container (`post-create.sh`) | Sets `git config --global user.email` inside the container |
-| `DATABASE_URL` | Sqitch migrations | PostgreSQL connection string for `sqitch deploy/verify` |
+| `DATABASE_URL` | Sqitch migrations and database CLI scripts | PostgreSQL connection string for `sqitch deploy/verify` and database-backed CLI workflows |
 
 ### Registering an account
 
