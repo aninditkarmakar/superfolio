@@ -295,7 +295,17 @@ BEGIN
           AND destination_account_id = v_destination_account_id
           AND (
               (departure_date = p_departure_date AND arrival_date = p_arrival_date)
-              OR daterange(departure_date + 1, arrival_date, '[)') && daterange(p_departure_date + 1, p_arrival_date, '[)')
+              OR (
+                  CASE WHEN departure_date < arrival_date
+                       THEN daterange(departure_date + 1, arrival_date, '[)')
+                       ELSE 'empty'::daterange
+                  END
+                  &&
+                  CASE WHEN p_departure_date < p_arrival_date
+                       THEN daterange(p_departure_date + 1, p_arrival_date, '[)')
+                       ELSE 'empty'::daterange
+                  END
+              )
           )
     ) THEN
         RAISE EXCEPTION 'Bridge overlaps an existing bridge for this source and destination account';

@@ -76,8 +76,29 @@ class MigrationContractTests(unittest.TestCase):
     def test_bridge_overlap_still_checks_open_interval_daterange(self) -> None:
         sql = PORTFOLIO_LAYER_DEPLOY.read_text(encoding="utf-8")
 
-        self.assertIn(
-            "daterange(departure_date + 1, arrival_date, '[)') && daterange(p_departure_date + 1, p_arrival_date, '[)')",
+        self.assertIn("daterange(departure_date + 1, arrival_date, '[)')", sql)
+        self.assertIn("daterange(p_departure_date + 1, p_arrival_date, '[)')", sql)
+
+    def test_bridge_overlap_uses_case_guard_for_existing_bridge(self) -> None:
+        sql = PORTFOLIO_LAYER_DEPLOY.read_text(encoding="utf-8")
+
+        self.assertIn("CASE WHEN departure_date < arrival_date", sql)
+
+    def test_bridge_overlap_uses_case_guard_for_new_bridge(self) -> None:
+        sql = PORTFOLIO_LAYER_DEPLOY.read_text(encoding="utf-8")
+
+        self.assertIn("CASE WHEN p_departure_date < p_arrival_date", sql)
+
+    def test_bridge_overlap_uses_empty_daterange_for_same_day_bridges(self) -> None:
+        sql = PORTFOLIO_LAYER_DEPLOY.read_text(encoding="utf-8")
+
+        self.assertIn("'empty'::daterange", sql)
+
+    def test_bridge_overlap_does_not_contain_unguarded_daterange_expression(self) -> None:
+        sql = PORTFOLIO_LAYER_DEPLOY.read_text(encoding="utf-8")
+
+        self.assertNotIn(
+            "OR daterange(departure_date + 1, arrival_date, '[)') && daterange(p_departure_date + 1, p_arrival_date, '[)')",
             sql,
         )
 
