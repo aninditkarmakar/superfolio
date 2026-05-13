@@ -147,16 +147,10 @@ The core TWR engine uses only the Python standard library. Database-backed comma
 
 ### `.env` — local configuration
 
-Create a `.env` file at the repository root (it is git-ignored). The dev container's `post-create.sh` reads this file on every container rebuild, so set it up once and it is applied automatically.
+Copy the checked-in `.env.example` template to `.env` at the repository root, then fill in local values. The `.env` file is git-ignored. The dev container's `post-create.sh` reads it on every container rebuild, so set it up once and it is applied automatically.
 
-```dotenv
-# Git identity — used by .devcontainer/post-create.sh to run
-# `git config --global user.name` and `git config --global user.email`
-GITHUB_NAME=Your Name
-GITHUB_EMAIL=your-id+handle@users.noreply.github.com
-
-# Database — Neon/PostgreSQL connection string (see Database Migrations section)
-DATABASE_URL=postgresql://USER:PASSWORD@HOST/neondb?sslmode=require&channel_binding=require
+```bash
+cp .env.example .env
 ```
 
 | Key | Required by | Purpose |
@@ -235,7 +229,7 @@ sqitch --version
 
 ### Configure the database URL
 
-Keep connection strings out of Git. Add your Neon connection string to the ignored local `.env` file (see the [`.env` reference](#env--local-configuration) in the Development Environment section for the full template).
+Keep connection strings out of Git. Add your Neon connection string to the ignored local `.env` file copied from `.env.example` (see the [`.env` reference](#env--local-configuration) in the Development Environment section for the full template).
 
 Load it from the repository root without printing the secret, then convert the PostgreSQL URL to Sqitch's `db:pg:` target URI:
 
