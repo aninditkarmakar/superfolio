@@ -8,6 +8,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 MIGRATIONS_DIR = REPO_ROOT / "migrations"
 REVERT_SCHEMA = MIGRATIONS_DIR / "revert" / "create_mvp_schema.sql"
 VERIFY_SCHEMA = MIGRATIONS_DIR / "verify" / "create_mvp_schema.sql"
+PORTFOLIO_LAYER_DEPLOY = MIGRATIONS_DIR / "deploy" / "create_portfolio_layer.sql"
 
 ACCOUNT_SCOPED_START_INGESTION_RUN_SIGNATURE = (
     "public.start_ingestion_run(TEXT, TEXT, TEXT, DATE, DATE, TEXT)"
@@ -47,6 +48,37 @@ class MigrationContractTests(unittest.TestCase):
         self.assertLess(
             plan_text.index("create_mvp_schema"),
             plan_text.index("create_portfolio_layer"),
+        )
+
+    def test_create_portfolio_uses_do_nothing_on_conflict(self) -> None:
+        sql = PORTFOLIO_LAYER_DEPLOY.read_text(encoding="utf-8")
+
+        self.assertIn("ON CONFLICT (name) DO NOTHING", sql)
+
+    def test_create_portfolio_does_not_silently_update_reporting_currency(self) -> None:
+        sql = PORTFOLIO_LAYER_DEPLOY.read_text(encoding="utf-8")
+
+        self.assertNotIn("SET reporting_currency = EXCLUDED.reporting_currency", sql)
+
+    def test_create_portfolio_raises_on_currency_mismatch(self) -> None:
+        sql = PORTFOLIO_LAYER_DEPLOY.read_text(encoding="utf-8")
+
+        self.assertIn("already exists with reporting_currency", sql)
+
+    def test_bridge_overlap_rejects_exact_duplicate_window(self) -> None:
+        sql = PORTFOLIO_LAYER_DEPLOY.read_text(encoding="utf-8")
+
+        self.assertIn(
+            "(departure_date = p_departure_date AND arrival_date = p_arrival_date)",
+            sql,
+        )
+
+    def test_bridge_overlap_still_checks_open_interval_daterange(self) -> None:
+        sql = PORTFOLIO_LAYER_DEPLOY.read_text(encoding="utf-8")
+
+        self.assertIn(
+            "daterange(departure_date + 1, arrival_date, '[)') && daterange(p_departure_date + 1, p_arrival_date, '[)')",
+            sql,
         )
 
 

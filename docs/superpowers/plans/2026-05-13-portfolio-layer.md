@@ -142,6 +142,7 @@ DECLARE
     v_portfolio_id UUID;
     v_name TEXT;
     v_reporting_currency TEXT;
+    v_existing_reporting_currency TEXT;
 BEGIN
     IF p_name IS NULL OR btrim(p_name) = '' THEN
         RAISE EXCEPTION 'portfolio name must not be NULL or blank';
@@ -155,10 +156,23 @@ BEGIN
 
     INSERT INTO public.portfolios (name, reporting_currency)
     VALUES (v_name, v_reporting_currency)
-    ON CONFLICT (name) DO UPDATE
-      SET reporting_currency = EXCLUDED.reporting_currency,
-          updated_at = now()
+    ON CONFLICT (name) DO NOTHING
     RETURNING id INTO v_portfolio_id;
+
+    IF v_portfolio_id IS NOT NULL THEN
+        RETURN v_portfolio_id;
+    END IF;
+
+    SELECT id, reporting_currency
+    INTO v_portfolio_id, v_existing_reporting_currency
+    FROM public.portfolios
+    WHERE name = v_name;
+
+    IF v_existing_reporting_currency <> v_reporting_currency THEN
+        RAISE EXCEPTION 'Portfolio % already exists with reporting_currency %',
+            v_name,
+            v_existing_reporting_currency;
+    END IF;
 
     RETURN v_portfolio_id;
 END;
@@ -279,7 +293,10 @@ BEGIN
         WHERE portfolio_id = v_portfolio_id
           AND source_account_id = v_source_account_id
           AND destination_account_id = v_destination_account_id
-          AND daterange(departure_date + 1, arrival_date, '[)') && daterange(p_departure_date + 1, p_arrival_date, '[)')
+          AND (
+              (departure_date = p_departure_date AND arrival_date = p_arrival_date)
+              OR daterange(departure_date + 1, arrival_date, '[)') && daterange(p_departure_date + 1, p_arrival_date, '[)')
+          )
     ) THEN
         RAISE EXCEPTION 'Bridge overlaps an existing bridge for this source and destination account';
     END IF;
