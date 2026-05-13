@@ -15,11 +15,13 @@ class FakeDatabase:
         self,
         snapshots: list[NavSnapshot] | None = None,
         flows: list[CashFlow] | None = None,
-        error: Exception | None = None,
+        nav_error: Exception | None = None,
+        flow_error: Exception | None = None,
     ) -> None:
         self.snapshots: list[NavSnapshot] = snapshots if snapshots is not None else []
         self.flows: list[CashFlow] = flows if flows is not None else []
-        self.error: Exception | None = error
+        self.nav_error: Exception | None = nav_error
+        self.flow_error: Exception | None = flow_error
         self.close_count: int = 0
         self.nav_calls: list[dict] = []
         self.flow_calls: list[dict] = []
@@ -40,8 +42,8 @@ class FakeDatabase:
         start_date: date,
         end_date: date,
     ) -> list[NavSnapshot]:
-        if self.error is not None:
-            raise self.error
+        if self.nav_error is not None:
+            raise self.nav_error
         self.nav_calls.append(
             {
                 "brokerage_code": brokerage_code,
@@ -59,6 +61,8 @@ class FakeDatabase:
         start_date: date,
         end_date: date,
     ) -> list[CashFlow]:
+        if self.flow_error is not None:
+            raise self.flow_error
         self.flow_calls.append(
             {
                 "brokerage_code": brokerage_code,
@@ -99,12 +103,12 @@ class DatabaseTwrCliTests(unittest.TestCase):
         exit_code = run(
             [
                 "--brokerage-code", "IBKR",
-                "--account-id", "U100",
+                "--account-external-id", "U100",
                 "--database-url", "postgresql://example",
-                "--start", "2026-01-02",
-                "--end", "2026-01-03",
+                "--start-date", "2026-01-02",
+                "--end-date", "2026-01-03",
             ],
-            db_connector=connector,
+            database_connector=connector,
             stdout=stdout,
             stderr=stderr,
         )
@@ -138,7 +142,7 @@ class DatabaseTwrCliTests(unittest.TestCase):
         self.assertIn("NAV snapshots: 2", output)
         self.assertIn("Cash-flow records: 1", output)
         self.assertIn("Return periods: 1", output)
-        self.assertIn("Date range", output)
+        self.assertIn("Date range: 2026-01-02 to 2026-01-03", output)
         self.assertIn("Cash-flow type: Deposits/Withdrawals", output)
         self.assertIn("Cash-flow timing: start", output)
         self.assertIn("TWR: 0.909091%", output)
@@ -159,11 +163,11 @@ class DatabaseTwrCliTests(unittest.TestCase):
         exit_code = run(
             [
                 "--brokerage-code", "IBKR",
-                "--account-id", "U100",
-                "--start", "2026-01-02",
-                "--end", "2026-01-03",
+                "--account-external-id", "U100",
+                "--start-date", "2026-01-02",
+                "--end-date", "2026-01-03",
             ],
-            db_connector=connector,
+            database_connector=connector,
             stdout=stdout,
             stderr=stderr,
         )
@@ -184,11 +188,11 @@ class DatabaseTwrCliTests(unittest.TestCase):
         exit_code = run(
             [
                 "--brokerage-code", "IBKR",
-                "--account-id", "U100",
-                "--start", "2026-01-02",
-                "--end", "2026-01-03",
+                "--account-external-id", "U100",
+                "--start-date", "2026-01-02",
+                "--end-date", "2026-01-03",
             ],
-            db_connector=connector,
+            database_connector=connector,
             stdout=stdout,
             stderr=stderr,
         )
@@ -209,39 +213,68 @@ class DatabaseTwrCliTests(unittest.TestCase):
         exit_code = run(
             [
                 "--brokerage-code", "IBKR",
-                "--account-id", "U100",
-                "--start", "2026-02-01",
-                "--end", "2026-01-31",
+                "--account-external-id", "U100",
+                "--start-date", "2026-02-01",
+                "--end-date", "2026-01-31",
             ],
-            db_connector=connector,
+            database_connector=connector,
             stdout=io.StringIO(),
             stderr=stderr,
         )
 
         self.assertEqual(exit_code, 1)
-        self.assertIn("Error", stderr.getvalue())
+        self.assertIn("Error: --start-date must be on or before --end-date", stderr.getvalue())
 
-    def test_run_prints_database_errors(self) -> None:
+    def test_run_prints_nav_database_errors(self) -> None:
         from portfolio_engine.db_twr import run
 
-        database = FakeDatabase(error=RuntimeError("database unavailable"))
+        database = FakeDatabase(nav_error=RuntimeError("database unavailable"))
         connector = FakeDatabaseConnector(database)
         stderr = io.StringIO()
 
         exit_code = run(
             [
                 "--brokerage-code", "IBKR",
-                "--account-id", "U100",
-                "--start", "2026-01-02",
-                "--end", "2026-01-03",
+                "--account-external-id", "U100",
+                "--start-date", "2026-01-02",
+                "--end-date", "2026-01-03",
             ],
-            db_connector=connector,
+            database_connector=connector,
             stdout=io.StringIO(),
             stderr=stderr,
         )
 
         self.assertEqual(exit_code, 1)
         self.assertIn("Error: database unavailable", stderr.getvalue())
+
+    def test_run_prints_cash_flow_database_errors(self) -> None:
+        from portfolio_engine.db_twr import run
+
+        snapshots = [
+            NavSnapshot(report_date=date(2026, 1, 2), total_base=Decimal("10000")),
+            NavSnapshot(report_date=date(2026, 1, 3), total_base=Decimal("10100")),
+        ]
+        database = FakeDatabase(
+            snapshots=snapshots,
+            flow_error=RuntimeError("cash flow query failed"),
+        )
+        connector = FakeDatabaseConnector(database)
+        stderr = io.StringIO()
+
+        exit_code = run(
+            [
+                "--brokerage-code", "IBKR",
+                "--account-external-id", "U100",
+                "--start-date", "2026-01-02",
+                "--end-date", "2026-01-03",
+            ],
+            database_connector=connector,
+            stdout=io.StringIO(),
+            stderr=stderr,
+        )
+
+        self.assertEqual(exit_code, 1)
+        self.assertIn("Error: cash flow query failed", stderr.getvalue())
 
     def test_run_writes_daily_output_csv(self) -> None:
         from portfolio_engine.db_twr import run
@@ -261,12 +294,12 @@ class DatabaseTwrCliTests(unittest.TestCase):
             exit_code = run(
                 [
                     "--brokerage-code", "IBKR",
-                    "--account-id", "U100",
-                    "--start", "2026-01-02",
-                    "--end", "2026-01-03",
+                    "--account-external-id", "U100",
+                    "--start-date", "2026-01-02",
+                    "--end-date", "2026-01-03",
                     "--daily-output", str(csv_path),
                 ],
-                db_connector=connector,
+                database_connector=connector,
                 stdout=stdout,
                 stderr=stderr,
             )
