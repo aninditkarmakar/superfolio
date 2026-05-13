@@ -256,6 +256,46 @@ class PortfolioCliTests(unittest.TestCase):
         self.assertEqual(factory.database_urls, [])
         self.assertIn("invalid decimal value", stderr.getvalue())
 
+    def test_create_bridge_rejects_non_finite_decimal_before_database_call(self) -> None:
+        from portfolio_engine.portfolio_cli import run
+
+        base_args = [
+            "create-bridge",
+            "--portfolio-name", "All Accounts",
+            "--source-brokerage-code", "IBKR",
+            "--source-account-external-id", "U100",
+            "--destination-brokerage-code", "IBKR",
+            "--destination-account-external-id", "U200",
+            "--departure-date", "2024-01-15",
+            "--arrival-date", "2024-01-20",
+            "--currency", "USD",
+        ]
+        # "-Infinity" must be passed as "--value=-Infinity" (equals form) because
+        # argparse would otherwise treat the leading dash as a flag prefix.
+        cases = [
+            ("Inf", ["--value", "Inf"]),
+            ("Infinity", ["--value", "Infinity"]),
+            ("-Infinity", ["--value=-Infinity"]),
+        ]
+        for label, value_args in cases:
+            with self.subTest(value=label):
+                database = FakePortfolioDatabase()
+                factory = FakeFactory(database)
+                stderr = io.StringIO()
+
+                with self.assertRaises(SystemExit) as cm:
+                    run(
+                        [*base_args, *value_args],
+                        database_connector=factory,
+                        stdout=io.StringIO(),
+                        stderr=stderr,
+                    )
+
+                self.assertEqual(cm.exception.code, 2, f"Expected exit code 2 for {label!r}")
+                self.assertEqual(database.close_count, 0, f"DB should not be opened for {label!r}")
+                self.assertEqual(factory.database_urls, [], f"Factory should not be called for {label!r}")
+                self.assertIn("invalid decimal value", stderr.getvalue(), f"stderr missing message for {label!r}")
+
     def test_database_url_is_forwarded(self) -> None:
         from portfolio_engine.portfolio_cli import run
 

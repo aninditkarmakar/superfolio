@@ -14,9 +14,12 @@ from .database import connect_database
 
 def _decimal_arg(value: str) -> Decimal:
     try:
-        return Decimal(value)
+        result = Decimal(value)
     except Exception as error:
         raise argparse.ArgumentTypeError(f"invalid decimal value: {value!r}") from error
+    if not result.is_finite():
+        raise argparse.ArgumentTypeError(f"invalid decimal value: {value!r}")
+    return result
 
 
 class PortfolioAdminDatabase(Protocol):
