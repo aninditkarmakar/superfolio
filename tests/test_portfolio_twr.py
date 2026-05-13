@@ -356,6 +356,26 @@ class PortfolioTwrCalculationTests(unittest.TestCase):
                 ],
             )
 
+    def test_overlapping_bridges_for_same_account_pair_fail(self) -> None:
+        with self.assertRaisesRegex(PortfolioTwrError, "overlaps another bridge"):
+            calculate_portfolio_twr(
+                reporting_currency="USD",
+                accounts=[self.ca, self.us],
+                nav_inputs=[
+                    PortfolioDailyInput(self.ca, date(2026, 1, 1), Decimal("100"), "USD"),
+                    PortfolioDailyInput(self.us, date(2026, 1, 1), Decimal("0"), "USD"),
+                    PortfolioDailyInput(self.ca, date(2026, 1, 2), Decimal("0"), "USD"),
+                    PortfolioDailyInput(self.us, date(2026, 1, 2), Decimal("0"), "USD"),
+                    PortfolioDailyInput(self.ca, date(2026, 1, 3), Decimal("0"), "USD"),
+                    PortfolioDailyInput(self.us, date(2026, 1, 3), Decimal("100"), "USD"),
+                ],
+                cash_flows=[],
+                transfer_bridges=[
+                    TransferBridge(self.ca, self.us, date(2026, 1, 1), date(2026, 1, 3), Decimal("100"), "USD"),
+                    TransferBridge(self.ca, self.us, date(2026, 1, 1), date(2026, 1, 3), Decimal("100"), "USD"),
+                ],
+            )
+
     def test_cash_flow_after_last_nav_date_fails(self) -> None:
         with self.assertRaisesRegex(PortfolioTwrError, r"cash-flow record\(s\) fell outside the NAV date range"):
             calculate_portfolio_twr(
@@ -367,6 +387,21 @@ class PortfolioTwrCalculationTests(unittest.TestCase):
                 ],
                 cash_flows=[
                     PortfolioCashFlow(self.ca, date(2026, 1, 5), Decimal("50"), "USD"),
+                ],
+                transfer_bridges=[],
+            )
+
+    def test_cash_flow_before_first_nav_date_fails(self) -> None:
+        with self.assertRaisesRegex(PortfolioTwrError, r"cash-flow record\(s\) fell outside the NAV date range"):
+            calculate_portfolio_twr(
+                reporting_currency="USD",
+                accounts=[self.ca],
+                nav_inputs=[
+                    PortfolioDailyInput(self.ca, date(2026, 1, 2), Decimal("100"), "USD"),
+                    PortfolioDailyInput(self.ca, date(2026, 1, 3), Decimal("105"), "USD"),
+                ],
+                cash_flows=[
+                    PortfolioCashFlow(self.ca, date(2026, 1, 1), Decimal("50"), "USD"),
                 ],
                 transfer_bridges=[],
             )

@@ -63,6 +63,7 @@ def calculate_portfolio_twr(
     if not nav_by_date_account:
         raise PortfolioTwrError("No NAV snapshots found for the selected portfolio and date range.")
 
+    nav_dates = sorted(nav_by_date_account)
     aligned_flow_inputs: list[CashFlow] = []
     for flow in cash_flows:
         if flow.base_currency.upper() != normalized_reporting_currency:
@@ -74,15 +75,17 @@ def calculate_portfolio_twr(
             raise PortfolioTwrError(
                 f"Cash-flow account {flow.account.label} is not a member of the portfolio."
             )
+        if flow.effective_date < nav_dates[0]:
+            raise PortfolioTwrError("1 cash-flow record(s) fell outside the NAV date range.")
         aligned_flow_inputs.append(CashFlow(flow.effective_date, flow.amount_base))
 
     bridge_value_by_date: defaultdict[date, Decimal] = defaultdict(Decimal)
-    nav_dates = sorted(nav_by_date_account)
     flows_by_date, dropped_flow_count = align_flows_to_nav_dates(aligned_flow_inputs, nav_dates)
     if dropped_flow_count:
         raise PortfolioTwrError(
             f"{dropped_flow_count} cash-flow record(s) fell outside the NAV date range."
         )
+    bridges_by_account_pair: defaultdict[tuple[str, str], list[TransferBridge]] = defaultdict(list)
     for bridge in transfer_bridges:
         if bridge.currency.upper() != normalized_reporting_currency:
             raise PortfolioTwrError(
@@ -97,6 +100,14 @@ def calculate_portfolio_twr(
             raise PortfolioTwrError(
                 f"Bridge destination account {bridge.destination_account.label} is not a member of the portfolio."
             )
+        bridge_pair = (bridge.source_account.label, bridge.destination_account.label)
+        for existing in bridges_by_account_pair[bridge_pair]:
+            if max(existing.departure_date, bridge.departure_date) < min(existing.arrival_date, bridge.arrival_date):
+                raise PortfolioTwrError(
+                    f"Transfer bridge for {bridge.source_account.label} to {bridge.destination_account.label} "
+                    "overlaps another bridge."
+                )
+        bridges_by_account_pair[bridge_pair].append(bridge)
         for nav_date in nav_dates:
             if bridge.departure_date < nav_date < bridge.arrival_date:
                 bridge_value_by_date[nav_date] += bridge.value
