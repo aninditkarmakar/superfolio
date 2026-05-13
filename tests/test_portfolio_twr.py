@@ -275,7 +275,51 @@ class PortfolioTwrCalculationTests(unittest.TestCase):
         self.assertEqual(rows[-1].net_cash_flow_base, Decimal("10"))
         self.assertEqual(rows[-1].period_return, Decimal("-0.0454545454545454545454545455"))
 
-    def test_mixed_account_currency_fails(self) -> None:
+    def test_nav_input_for_non_member_account_fails(self) -> None:
+        ghost = AccountRef("IBKR", "UGHOST", "USD", "Ghost")
+
+        with self.assertRaisesRegex(PortfolioTwrError, "not a member of the portfolio"):
+            calculate_portfolio_twr(
+                reporting_currency="USD",
+                accounts=[self.ca],
+                nav_inputs=[
+                    PortfolioDailyInput(self.ca, date(2026, 1, 1), Decimal("100"), "USD"),
+                    PortfolioDailyInput(ghost, date(2026, 1, 1), Decimal("500"), "USD"),
+                ],
+                cash_flows=[],
+                transfer_bridges=[],
+            )
+
+    def test_cash_flow_after_last_nav_date_fails(self) -> None:
+        with self.assertRaisesRegex(PortfolioTwrError, r"cash-flow record\(s\) fell outside the NAV date range"):
+            calculate_portfolio_twr(
+                reporting_currency="USD",
+                accounts=[self.ca],
+                nav_inputs=[
+                    PortfolioDailyInput(self.ca, date(2026, 1, 1), Decimal("100"), "USD"),
+                    PortfolioDailyInput(self.ca, date(2026, 1, 2), Decimal("105"), "USD"),
+                ],
+                cash_flows=[
+                    PortfolioCashFlow(self.ca, date(2026, 1, 5), Decimal("50"), "USD"),
+                ],
+                transfer_bridges=[],
+            )
+
+    def test_duplicate_nav_input_for_account_date_fails(self) -> None:
+        with self.assertRaisesRegex(PortfolioTwrError, "Duplicate NAV input"):
+            calculate_portfolio_twr(
+                reporting_currency="USD",
+                accounts=[self.ca],
+                nav_inputs=[
+                    PortfolioDailyInput(self.ca, date(2026, 1, 1), Decimal("100"), "USD"),
+                    PortfolioDailyInput(self.ca, date(2026, 1, 1), Decimal("101"), "USD"),
+                ],
+                cash_flows=[],
+                transfer_bridges=[],
+            )
+
+
+
         cad_account = AccountRef("IBKR", "UCAD", "CAD", "CAD account")
         with self.assertRaisesRegex(PortfolioTwrError, "Account IBKR:UCAD base currency CAD"):
             calculate_portfolio_twr(

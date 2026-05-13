@@ -1199,9 +1199,18 @@ def missing_nav_counts(rows: list[PortfolioTwrRow]) -> Counter[str]:
 > ignored. The fix imports `CashFlow` and `align_flows_to_nav_dates` from `.models` / `.twr`,
 > converts validated portfolio flows to `CashFlow` objects, then calls
 > `align_flows_to_nav_dates(aligned_flow_inputs, nav_dates)` before `calculate_twr`, matching the
-> single-account path in `db_twr.py`. `_dropped_flow_count` intentionally captures the dropped-
-> flow count without surfacing it (a future CLI task may expose it).
-> The regression test `test_cash_flow_between_nav_dates_aligns_to_next_nav_date` covers this case.
+> single-account path in `db_twr.py`.
+
+> **Follow-up integrity checks (quality-review fix):** Three data-integrity guards were added after
+> the initial implementation:
+> 1. **Non-member account NAV inputs** — in the nav-input loop, `nav.account.label` is validated
+>    against `account_label_set`; raises `PortfolioTwrError` with "not a member of the portfolio".
+> 2. **Cash flows beyond NAV range** — after `align_flows_to_nav_dates`, if `dropped_flow_count > 0`
+>    raises `PortfolioTwrError` with "cash-flow record(s) fell outside the NAV date range".
+> 3. **Duplicate NAV inputs** — in the nav-input loop, duplicate account/date pairs raise
+>    `PortfolioTwrError` with "Duplicate NAV input".
+> Tests: `test_nav_input_for_non_member_account_fails`, `test_cash_flow_after_last_nav_date_fails`,
+> `test_duplicate_nav_input_for_account_date_fails`.
 
 Run:
 
