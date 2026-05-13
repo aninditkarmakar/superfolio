@@ -15,7 +15,7 @@ from portfolio_engine.database import (
     SuperFolioDatabase,
     connect_database,
 )
-from portfolio_engine.models import AccountRef, CashFlow, NavSnapshot, PortfolioDailyInput, PortfolioSummary, TransferBridge
+from portfolio_engine.models import AccountRef, CashFlow, NavSnapshot, PortfolioCashFlow, PortfolioDailyInput, PortfolioSummary, TransferBridge
 
 
 class FakeCursor:
@@ -681,6 +681,8 @@ class DatabaseAdapterTests(unittest.TestCase):
         self.assertEqual(params, ("All Accounts",))
 
     def test_fetch_portfolio_nav_inputs_maps_currency_aware_rows(self) -> None:
+        start = date(2026, 1, 1)
+        end = date(2026, 1, 31)
         connection = FakeConnection(
             rows=[
                 ("IBKR", "UCA", "USD", "Canada account", date(2026, 1, 2), Decimal("100.00"), "USD"),
@@ -690,8 +692,8 @@ class DatabaseAdapterTests(unittest.TestCase):
 
         inputs = database.fetch_portfolio_nav_inputs(
             portfolio_name="All Accounts",
-            start_date=date(2026, 1, 1),
-            end_date=date(2026, 1, 31),
+            start_date=start,
+            end_date=end,
         )
 
         self.assertEqual(
@@ -705,7 +707,79 @@ class DatabaseAdapterTests(unittest.TestCase):
                 )
             ],
         )
+        self.assertEqual(connection.commit_count, 1)
+        self.assertEqual(connection.rollback_count, 0)
+        sql, params = connection.cursor_instance.executed[0]
+        self.assertIn("daily_nav_snapshots", sql)
+        self.assertEqual(params, ("All Accounts", start, start, end, end))
 
+    def test_fetch_portfolio_cash_flows_maps_rows(self) -> None:
+        start = date(2026, 1, 1)
+        end = date(2026, 1, 31)
+        connection = FakeConnection(
+            rows=[
+                ("IBKR", "U100", "USD", "Main account", date(2026, 1, 5), Decimal("1000.00")),
+            ]
+        )
+        database = SuperFolioDatabase(connection)
+
+        flows = database.fetch_portfolio_cash_flows(
+            portfolio_name="All Accounts",
+            start_date=start,
+            end_date=end,
+        )
+
+        self.assertEqual(
+            flows,
+            [
+                PortfolioCashFlow(
+                    AccountRef("IBKR", "U100", "USD", "Main account"),
+                    date(2026, 1, 5),
+                    Decimal("1000.00"),
+                    "USD",
+                )
+            ],
+        )
+        self.assertEqual(connection.commit_count, 1)
+        self.assertEqual(connection.rollback_count, 0)
+        sql, params = connection.cursor_instance.executed[0]
+        self.assertIn("cash_flows", sql)
+        self.assertIn("c.cash_flow_type = %s", sql)
+        self.assertEqual(params, ("All Accounts", "Deposits/Withdrawals", start, start, end, end))
+
+    def test_fetch_portfolio_transfer_bridges_maps_rows(self) -> None:
+        connection = FakeConnection(
+            rows=[
+                (
+                    "IBKR", "U100", "USD", "Source account",
+                    "IBKR", "U200", "CAD", "Dest account",
+                    date(2026, 1, 2), date(2026, 1, 4), Decimal("5000.00"), "USD", "relocation",
+                ),
+            ]
+        )
+        database = SuperFolioDatabase(connection)
+
+        bridges = database.fetch_portfolio_transfer_bridges("All Accounts")
+
+        self.assertEqual(
+            bridges,
+            [
+                TransferBridge(
+                    source_account=AccountRef("IBKR", "U100", "USD", "Source account"),
+                    destination_account=AccountRef("IBKR", "U200", "CAD", "Dest account"),
+                    departure_date=date(2026, 1, 2),
+                    arrival_date=date(2026, 1, 4),
+                    value=Decimal("5000.00"),
+                    currency="USD",
+                    note="relocation",
+                )
+            ],
+        )
+        self.assertEqual(connection.commit_count, 1)
+        self.assertEqual(connection.rollback_count, 0)
+        sql, params = connection.cursor_instance.executed[0]
+        self.assertIn("portfolio_transfer_bridges", sql)
+        self.assertEqual(params, ("All Accounts",))
 
 
 if __name__ == "__main__":
