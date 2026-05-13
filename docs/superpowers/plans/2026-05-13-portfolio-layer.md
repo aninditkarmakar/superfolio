@@ -431,6 +431,7 @@ Create `tests/test_portfolio_twr.py` with this content:
 from __future__ import annotations
 
 import unittest
+from dataclasses import FrozenInstanceError
 from datetime import date
 from decimal import Decimal
 
@@ -487,6 +488,41 @@ class PortfolioModelTests(unittest.TestCase):
         self.assertEqual(bridge.note, "move")
         self.assertEqual(row.missing_nav_accounts, ("IBKR:U100",))
 
+        with self.assertRaises(FrozenInstanceError):
+            setattr(account, "base_currency", "CAD")
+        with self.assertRaises(FrozenInstanceError):
+            setattr(flow, "amount_base", Decimal("99.00"))
+        with self.assertRaises(FrozenInstanceError):
+            setattr(daily_input, "nav_base", Decimal("0"))
+        with self.assertRaises(FrozenInstanceError):
+            setattr(bridge, "arrival_date", date(2026, 1, 3))
+        with self.assertRaises(FrozenInstanceError):
+            setattr(row, "cumulative_twr", Decimal("1"))
+
+    def test_portfolio_cash_flow_rejects_currency_mismatch(self) -> None:
+        account = AccountRef("IBKR", "U100", "USD", None)
+
+        with self.assertRaisesRegex(ValueError, "cash-flow base currency"):
+            PortfolioCashFlow(
+                account=account,
+                effective_date=date(2026, 1, 2),
+                amount_base=Decimal("10.00"),
+                base_currency="CAD",
+            )
+
+    def test_transfer_bridge_rejects_arrival_before_departure(self) -> None:
+        account = AccountRef("IBKR", "U100", "USD", None)
+
+        with self.assertRaisesRegex(ValueError, "arrival_date must be on or after departure_date"):
+            TransferBridge(
+                source_account=account,
+                destination_account=AccountRef("IBKR", "U200", "USD", None),
+                departure_date=date(2026, 1, 4),
+                arrival_date=date(2026, 1, 2),
+                value=Decimal("50.00"),
+                currency="USD",
+            )
+
 
 if __name__ == "__main__":
     unittest.main()
@@ -534,6 +570,13 @@ class PortfolioCashFlow:
     amount_base: Decimal
     base_currency: str
 
+    def __post_init__(self) -> None:
+        if self.base_currency != self.account.base_currency:
+            raise ValueError(
+                f"cash-flow base currency {self.base_currency} does not match "
+                f"account base currency {self.account.base_currency}"
+            )
+
 
 @dataclass(frozen=True)
 class PortfolioDailyInput:
@@ -552,6 +595,10 @@ class TransferBridge:
     value: Decimal
     currency: str
     note: str | None = None
+
+    def __post_init__(self) -> None:
+        if self.arrival_date < self.departure_date:
+            raise ValueError("arrival_date must be on or after departure_date")
 
 
 @dataclass(frozen=True)

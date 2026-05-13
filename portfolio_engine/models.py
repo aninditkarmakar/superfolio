@@ -54,6 +54,13 @@ class PortfolioCashFlow:
     amount_base: Decimal
     base_currency: str
 
+    def __post_init__(self) -> None:
+        if self.base_currency != self.account.base_currency:
+            raise ValueError(
+                f"cash-flow base currency {self.base_currency} does not match "
+                f"account base currency {self.account.base_currency}"
+            )
+
 
 @dataclass(frozen=True)
 class PortfolioDailyInput:
@@ -72,6 +79,10 @@ class TransferBridge:
     value: Decimal
     currency: str
     note: str | None = None
+
+    def __post_init__(self) -> None:
+        if self.arrival_date < self.departure_date:
+            raise ValueError("arrival_date must be on or after departure_date")
 
 
 @dataclass(frozen=True)
