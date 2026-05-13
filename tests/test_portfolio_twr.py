@@ -318,8 +318,7 @@ class PortfolioTwrCalculationTests(unittest.TestCase):
                 transfer_bridges=[],
             )
 
-
-
+    def test_mixed_account_currency_fails(self) -> None:
         cad_account = AccountRef("IBKR", "UCAD", "CAD", "CAD account")
         with self.assertRaisesRegex(PortfolioTwrError, "Account IBKR:UCAD base currency CAD"):
             calculate_portfolio_twr(
