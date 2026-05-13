@@ -4,6 +4,7 @@ import os
 import unittest
 from dataclasses import FrozenInstanceError
 from datetime import date
+from decimal import Decimal
 from typing import Any
 
 from portfolio_engine.database import (
@@ -14,11 +15,17 @@ from portfolio_engine.database import (
     SuperFolioDatabase,
     connect_database,
 )
+from portfolio_engine.models import CashFlow, NavSnapshot
 
 
 class FakeCursor:
-    def __init__(self, row: tuple[Any, ...] | None = None) -> None:
+    def __init__(
+        self,
+        row: tuple[Any, ...] | None = None,
+        rows: list[tuple[Any, ...]] | None = None,
+    ) -> None:
         self.row = row
+        self.rows = [] if rows is None else rows
         self.executed: list[tuple[str, tuple[Any, ...]]] = []
 
     def __enter__(self) -> "FakeCursor":
@@ -33,10 +40,17 @@ class FakeCursor:
     def fetchone(self) -> tuple[Any, ...] | None:
         return self.row
 
+    def fetchall(self) -> list[tuple[Any, ...]]:
+        return self.rows
+
 
 class FakeConnection:
-    def __init__(self, row: tuple[Any, ...] | None = None) -> None:
-        self.cursor_instance = FakeCursor(row)
+    def __init__(
+        self,
+        row: tuple[Any, ...] | None = None,
+        rows: list[tuple[Any, ...]] | None = None,
+    ) -> None:
+        self.cursor_instance = FakeCursor(row, rows)
         self.commit_count = 0
         self.rollback_count = 0
         self.close_count = 0
@@ -383,6 +397,144 @@ class DatabaseAdapterTests(unittest.TestCase):
         self.assertIsNotNone(IngestionRunStart)
         self.assertIsNotNone(SuperFolioDatabase)
         self.assertIsNotNone(connect_database)
+
+    def test_fetch_nav_snapshots_returns_ordered_models(self) -> None:
+        connection = FakeConnection(
+            rows=[
+                (date(2026, 1, 2), Decimal("10000.00")),
+                (date(2026, 1, 3), Decimal("10100.00")),
+            ]
+        )
+        database = SuperFolioDatabase(connection)
+
+        snapshots = database.fetch_nav_snapshots(
+            brokerage_code="IBKR",
+            account_external_id="U100",
+            start_date=date(2026, 1, 1),
+            end_date=date(2026, 1, 31),
+        )
+
+        self.assertEqual(
+            snapshots,
+            [
+                NavSnapshot(report_date=date(2026, 1, 2), total_base=Decimal("10000.00")),
+                NavSnapshot(report_date=date(2026, 1, 3), total_base=Decimal("10100.00")),
+            ],
+        )
+        self.assertEqual(connection.commit_count, 1)
+        self.assertEqual(connection.rollback_count, 0)
+        sql, params = connection.cursor_instance.executed[0]
+        self.assertIn("FROM daily_nav_snapshots", sql)
+        self.assertIn("JOIN accounts", sql)
+        self.assertIn("JOIN brokerages", sql)
+        self.assertIn("ORDER BY d.snapshot_date", sql)
+        self.assertEqual(
+            params,
+            (
+                "IBKR",
+                "U100",
+                date(2026, 1, 1),
+                date(2026, 1, 1),
+                date(2026, 1, 31),
+                date(2026, 1, 31),
+            ),
+        )
+
+    def test_fetch_cash_flows_returns_deposit_withdrawal_models(self) -> None:
+        connection = FakeConnection(
+            rows=[
+                (date(2026, 1, 3), Decimal("1000.00")),
+                (date(2026, 1, 5), Decimal("-250.00")),
+            ]
+        )
+        database = SuperFolioDatabase(connection)
+
+        flows = database.fetch_cash_flows(
+            brokerage_code="IBKR",
+            account_external_id="U100",
+            start_date=date(2026, 1, 1),
+            end_date=date(2026, 1, 31),
+        )
+
+        self.assertEqual(
+            flows,
+            [
+                CashFlow(effective_date=date(2026, 1, 3), amount_base=Decimal("1000.00")),
+                CashFlow(effective_date=date(2026, 1, 5), amount_base=Decimal("-250.00")),
+            ],
+        )
+        self.assertEqual(connection.commit_count, 1)
+        self.assertEqual(connection.rollback_count, 0)
+        sql, params = connection.cursor_instance.executed[0]
+        self.assertIn("FROM cash_flows", sql)
+        self.assertIn("c.cash_flow_type = %s", sql)
+        self.assertIn("ORDER BY c.flow_date", sql)
+        self.assertEqual(
+            params,
+            (
+                "IBKR",
+                "U100",
+                "Deposits/Withdrawals",
+                date(2026, 1, 1),
+                date(2026, 1, 1),
+                date(2026, 1, 31),
+                date(2026, 1, 31),
+            ),
+        )
+
+    def test_fetch_queries_keep_user_inputs_out_of_sql_text(self) -> None:
+        connection = FakeConnection(rows=[])
+        database = SuperFolioDatabase(connection)
+        malicious_brokerage = "IBKR'; DROP TABLE accounts; --"
+        malicious_account = "U100' OR TRUE --"
+
+        database.fetch_nav_snapshots(
+            brokerage_code=malicious_brokerage,
+            account_external_id=malicious_account,
+            start_date=date(2026, 1, 1),
+            end_date=date(2026, 1, 31),
+        )
+        database.fetch_cash_flows(
+            brokerage_code=malicious_brokerage,
+            account_external_id=malicious_account,
+            start_date=date(2026, 1, 1),
+            end_date=date(2026, 1, 31),
+        )
+
+        for sql, params in connection.cursor_instance.executed:
+            self.assertNotIn("DROP TABLE", sql)
+            self.assertNotIn("OR TRUE", sql)
+            self.assertNotIn(malicious_account, sql)
+            self.assertIn("%s", sql)
+            self.assertIn(malicious_brokerage, params)
+            self.assertIn(malicious_account, params)
+
+    def test_fetch_methods_allow_absent_date_filters(self) -> None:
+        connection = FakeConnection(rows=[])
+        database = SuperFolioDatabase(connection)
+
+        self.assertEqual(
+            database.fetch_nav_snapshots(
+                brokerage_code="IBKR",
+                account_external_id="U100",
+            ),
+            [],
+        )
+        self.assertEqual(
+            database.fetch_cash_flows(
+                brokerage_code="IBKR",
+                account_external_id="U100",
+            ),
+            [],
+        )
+
+        self.assertEqual(connection.commit_count, 2)
+        self.assertEqual(connection.rollback_count, 0)
+        self.assertEqual(connection.cursor_instance.executed[0][1], ("IBKR", "U100", None, None, None, None))
+        self.assertEqual(
+            connection.cursor_instance.executed[1][1],
+            ("IBKR", "U100", "Deposits/Withdrawals", None, None, None, None),
+        )
 
 
 
