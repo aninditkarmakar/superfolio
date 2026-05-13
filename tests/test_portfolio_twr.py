@@ -290,6 +290,57 @@ class PortfolioTwrCalculationTests(unittest.TestCase):
                 transfer_bridges=[],
             )
 
+    def test_cash_flow_for_non_member_account_fails(self) -> None:
+        ghost = AccountRef("IBKR", "UGHOST", "USD", "Ghost")
+
+        with self.assertRaisesRegex(PortfolioTwrError, "Cash-flow account IBKR:UGHOST"):
+            calculate_portfolio_twr(
+                reporting_currency="USD",
+                accounts=[self.ca],
+                nav_inputs=[
+                    PortfolioDailyInput(self.ca, date(2026, 1, 1), Decimal("100"), "USD"),
+                    PortfolioDailyInput(self.ca, date(2026, 1, 2), Decimal("100"), "USD"),
+                ],
+                cash_flows=[
+                    PortfolioCashFlow(ghost, date(2026, 1, 2), Decimal("50"), "USD"),
+                ],
+                transfer_bridges=[],
+            )
+
+    def test_bridge_with_non_member_source_fails(self) -> None:
+        ghost = AccountRef("IBKR", "UGHOST", "USD", "Ghost")
+
+        with self.assertRaisesRegex(PortfolioTwrError, "Bridge source account IBKR:UGHOST"):
+            calculate_portfolio_twr(
+                reporting_currency="USD",
+                accounts=[self.ca],
+                nav_inputs=[
+                    PortfolioDailyInput(self.ca, date(2026, 1, 1), Decimal("100"), "USD"),
+                    PortfolioDailyInput(self.ca, date(2026, 1, 2), Decimal("100"), "USD"),
+                ],
+                cash_flows=[],
+                transfer_bridges=[
+                    TransferBridge(ghost, self.ca, date(2026, 1, 1), date(2026, 1, 2), Decimal("25"), "USD"),
+                ],
+            )
+
+    def test_bridge_with_non_member_destination_fails(self) -> None:
+        ghost = AccountRef("IBKR", "UGHOST", "USD", "Ghost")
+
+        with self.assertRaisesRegex(PortfolioTwrError, "Bridge destination account IBKR:UGHOST"):
+            calculate_portfolio_twr(
+                reporting_currency="USD",
+                accounts=[self.ca],
+                nav_inputs=[
+                    PortfolioDailyInput(self.ca, date(2026, 1, 1), Decimal("100"), "USD"),
+                    PortfolioDailyInput(self.ca, date(2026, 1, 2), Decimal("100"), "USD"),
+                ],
+                cash_flows=[],
+                transfer_bridges=[
+                    TransferBridge(self.ca, ghost, date(2026, 1, 1), date(2026, 1, 2), Decimal("25"), "USD"),
+                ],
+            )
+
     def test_cash_flow_after_last_nav_date_fails(self) -> None:
         with self.assertRaisesRegex(PortfolioTwrError, r"cash-flow record\(s\) fell outside the NAV date range"):
             calculate_portfolio_twr(

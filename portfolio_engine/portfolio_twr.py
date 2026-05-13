@@ -70,6 +70,10 @@ def calculate_portfolio_twr(
                 f"Cash-flow currency {flow.base_currency} for {flow.account.label} does not match "
                 f"portfolio reporting currency {normalized_reporting_currency}."
             )
+        if flow.account.label not in account_label_set:
+            raise PortfolioTwrError(
+                f"Cash-flow account {flow.account.label} is not a member of the portfolio."
+            )
         aligned_flow_inputs.append(CashFlow(flow.effective_date, flow.amount_base))
 
     bridge_value_by_date: defaultdict[date, Decimal] = defaultdict(Decimal)
@@ -84,6 +88,14 @@ def calculate_portfolio_twr(
             raise PortfolioTwrError(
                 f"Bridge currency {bridge.currency} does not match portfolio reporting currency "
                 f"{normalized_reporting_currency}."
+            )
+        if bridge.source_account.label not in account_label_set:
+            raise PortfolioTwrError(
+                f"Bridge source account {bridge.source_account.label} is not a member of the portfolio."
+            )
+        if bridge.destination_account.label not in account_label_set:
+            raise PortfolioTwrError(
+                f"Bridge destination account {bridge.destination_account.label} is not a member of the portfolio."
             )
         for nav_date in nav_dates:
             if bridge.departure_date < nav_date < bridge.arrival_date:
