@@ -37,7 +37,9 @@ CREATE TABLE public.automation_jobs (
         OR (requested_start_date IS NOT NULL AND requested_end_date IS NOT NULL)
     ),
     CONSTRAINT automation_jobs_requested_date_range_check CHECK (
-        requested_start_date <= requested_end_date
+        requested_start_date IS NULL
+        OR requested_end_date IS NULL
+        OR requested_start_date <= requested_end_date
     ),
     CONSTRAINT automation_jobs_completed_after_started_check CHECK (
         completed_at IS NULL OR completed_at >= started_at

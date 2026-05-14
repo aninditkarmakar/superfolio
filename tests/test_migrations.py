@@ -181,6 +181,13 @@ class MigrationContractTests(unittest.TestCase):
         self.assertNotIn("requested_start_date DATE NOT NULL", sql)
         self.assertNotIn("requested_end_date DATE NOT NULL", sql)
 
+    def test_automation_layer_date_range_check_explicitly_allows_null_dates(self) -> None:
+        sql = (MIGRATIONS_DIR / "deploy" / "create_automation_layer.sql").read_text(encoding="utf-8")
+
+        self.assertIn("requested_start_date IS NULL", sql)
+        self.assertIn("OR requested_end_date IS NULL", sql)
+        self.assertIn("OR requested_start_date <= requested_end_date", sql)
+
 
 if __name__ == "__main__":
     unittest.main()
