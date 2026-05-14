@@ -76,6 +76,8 @@ def _int_field(key: str, raw: dict[object, object], field: str) -> int:
     value = raw[field]
     if value is None:
         raise ValueError(f"integration '{key}' field {field} must not be null")
+    if isinstance(value, bool):
+        raise ValueError(f"integration '{key}' field {field} must be an integer")
     try:
         return int(value)
     except (TypeError, ValueError) as error:

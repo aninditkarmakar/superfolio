@@ -161,6 +161,27 @@ integrations:
         ):
             load_integration_config("test", path=path)
 
+    def test_boolean_timeout_fails_with_context(self) -> None:
+        path = self._write_config(
+            """
+integrations:
+  test:
+    brokerage_code: IBKR
+    source_type: FLEX_WEB_SERVICE
+    adapter_key: ibkr_flex_ws
+    supported_modes:
+      - dry-run
+    required_env_keys:
+      - DATABASE_URL
+    stale_running_timeout_minutes: true
+"""
+        )
+
+        with self.assertRaisesRegex(
+            ValueError, "integration 'test' field stale_running_timeout_minutes must be an integer"
+        ):
+            load_integration_config("test", path=path)
+
     def test_null_list_item_fails_with_context(self) -> None:
         path = self._write_config(
             """
