@@ -14,9 +14,9 @@ _SECRET_ASSIGNMENT_RE = re.compile(
     re.IGNORECASE,
 )
 
-# Match amount/nav key=value assignments containing numeric values
+# Match amount/nav key=value assignments containing numeric values (including negative)
 _FINANCIAL_ASSIGNMENT_RE = re.compile(
-    r"(?:amount|nav)\s*=\s*[\d.,]+",
+    r"(?:amount|nav)\s*=\s*-?[\d.,]+",
     re.IGNORECASE,
 )
 

@@ -80,6 +80,12 @@ def build_parent_summary(
         "failed": child_statuses.count("failed"),
     }
 
+    if len(child_statuses) != len(child_summaries):
+        raise ValueError(
+            "child_statuses and child_summaries must have the same length"
+            f" (got {len(child_statuses)} and {len(child_summaries)})"
+        )
+
     aggregate = empty_record_counts()
     for child in child_summaries:
         # Accept either {"record_counts": {...}} or raw record_counts dict
@@ -90,8 +96,11 @@ def build_parent_summary(
         for rt in RECORD_TYPES:
             if rt not in rc:
                 continue
+            record_type_counts = rc[rt]
+            if not isinstance(record_type_counts, dict):
+                continue
             for key in COUNT_KEYS:
-                aggregate[rt][key] += rc[rt].get(key, 0)
+                aggregate[rt][key] += record_type_counts.get(key, 0)
 
     return {
         "account_counts": account_counts,

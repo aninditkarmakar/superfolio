@@ -170,6 +170,26 @@ class BuildParentSummaryTests(unittest.TestCase):
         a["record_counts"]["cash_flows"]["supported"] = 99
         self.assertEqual(b["record_counts"]["cash_flows"]["supported"], 0)
 
+    def test_raises_on_mismatched_lengths(self) -> None:
+        with self.assertRaises(ValueError) as ctx:
+            build_parent_summary(
+                child_statuses=["succeeded", "failed"],
+                child_summaries=[empty_record_counts()],
+            )
+        self.assertIn("child_statuses and child_summaries must have the same length", str(ctx.exception))
+
+    def test_malformed_record_type_dict_treated_as_zero(self) -> None:
+        # cash_flows is a string (not a dict), daily_nav_snapshots is valid
+        child = {"record_counts": {"cash_flows": "not-a-dict", "daily_nav_snapshots": {"supported": 3}}}
+        result = build_parent_summary(
+            child_statuses=["succeeded"],
+            child_summaries=[child],
+        )
+        # Malformed cash_flows treated as zero — must not crash
+        self.assertEqual(result["record_counts"]["cash_flows"]["supported"], 0)
+        # Valid daily_nav_snapshots still aggregated
+        self.assertEqual(result["record_counts"]["daily_nav_snapshots"]["supported"], 3)
+
 
 class SanitizeErrorMessageTests(unittest.TestCase):
     def test_none_returns_none(self) -> None:
@@ -225,6 +245,18 @@ class SanitizeErrorMessageTests(unittest.TestCase):
 
     def test_redacts_nav_assignment(self) -> None:
         msg = "nav=99999.00 was calculated"
+        result = sanitize_error_message(msg)
+        self.assertNotIn("99999.00", result)
+        self.assertIn("[redacted]", result)
+
+    def test_redacts_negative_amount_assignment(self) -> None:
+        msg = "amount=-1234.56 caused error"
+        result = sanitize_error_message(msg)
+        self.assertNotIn("1234.56", result)
+        self.assertIn("[redacted]", result)
+
+    def test_redacts_negative_nav_assignment(self) -> None:
+        msg = "nav=-99999.00 was calculated"
         result = sanitize_error_message(msg)
         self.assertNotIn("99999.00", result)
         self.assertIn("[redacted]", result)
