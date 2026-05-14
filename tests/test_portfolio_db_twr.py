@@ -51,9 +51,21 @@ class FakePortfolioTwrDatabase:
 class FakeFactory:
     def __init__(self, database: FakePortfolioTwrDatabase) -> None:
         self.database = database
+        self.call_count = 0
 
     def __call__(self, database_url: str | None = None) -> FakePortfolioTwrDatabase:
+        self.call_count += 1
         return self.database
+
+
+class RaisingFactory:
+    """Factory that raises the given exception when called (simulates DB open failure)."""
+
+    def __init__(self, exc: Exception) -> None:
+        self.exc = exc
+
+    def __call__(self, database_url: str | None = None) -> FakePortfolioTwrDatabase:
+        raise self.exc
 
 
 class PortfolioDbTwrCliTests(unittest.TestCase):
@@ -77,9 +89,54 @@ class PortfolioDbTwrCliTests(unittest.TestCase):
         self.assertIn("Reporting currency: USD", output)
         self.assertIn("Member accounts: 2", output)
         self.assertIn("NAV rows: 4", output)
+        self.assertIn("Cash-flow records: 0", output)
+        self.assertIn("Transfer bridges: 0", output)
         self.assertIn("Return periods: 1", output)
         self.assertIn("TWR: 0.000000%", output)
         self.assertEqual(stderr.getvalue(), "")
+
+    def test_run_rejects_start_date_after_end_date(self) -> None:
+        from portfolio_engine.portfolio_db_twr import run
+
+        factory = FakeFactory(FakePortfolioTwrDatabase())
+        stdout = io.StringIO()
+        stderr = io.StringIO()
+
+        exit_code = run(
+            [
+                "--portfolio-name", "All Accounts",
+                "--reporting-currency", "USD",
+                "--start-date", "2026-01-05",
+                "--end-date", "2026-01-01",
+            ],
+            database_connector=factory,
+            stdout=stdout,
+            stderr=stderr,
+        )
+
+        self.assertEqual(exit_code, 1)
+        err = stderr.getvalue()
+        self.assertIn("Error:", err)
+        self.assertIn("--start-date must be on or before --end-date", err)
+        self.assertEqual(stdout.getvalue(), "")
+        self.assertEqual(factory.call_count, 0, "DB connector must not be opened when validation fails")
+
+    def test_run_handles_runtime_error_from_connector(self) -> None:
+        from portfolio_engine.portfolio_db_twr import run
+
+        stdout = io.StringIO()
+        stderr = io.StringIO()
+
+        exit_code = run(
+            ["--portfolio-name", "All Accounts", "--reporting-currency", "USD"],
+            database_connector=RaisingFactory(RuntimeError("boom")),
+            stdout=stdout,
+            stderr=stderr,
+        )
+
+        self.assertEqual(exit_code, 1)
+        self.assertIn("Error: boom", stderr.getvalue())
+        self.assertEqual(stdout.getvalue(), "")
 
     def test_run_writes_optional_daily_csv(self) -> None:
         from portfolio_engine.portfolio_db_twr import run
