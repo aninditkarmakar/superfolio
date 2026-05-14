@@ -90,7 +90,7 @@ Stores saved portfolio calculation/view definitions. A portfolio has a unique na
 
 ### `portfolio_accounts`
 
-Stores many-to-many membership between portfolios and brokerage accounts. An account can belong to multiple portfolios. Inactive accounts still contribute historical data when they are members.
+Stores many-to-many membership between portfolios and brokerage accounts. An account can belong to multiple portfolios when its base currency matches the portfolio reporting currency. Inactive accounts still contribute historical data when they are members.
 
 ### `portfolio_transfer_bridges`
 

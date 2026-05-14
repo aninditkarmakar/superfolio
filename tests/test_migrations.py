@@ -65,6 +65,18 @@ class MigrationContractTests(unittest.TestCase):
 
         self.assertIn("already exists with reporting_currency", sql)
 
+    def test_attach_portfolio_account_rejects_currency_mismatch_before_insert(self) -> None:
+        sql = PORTFOLIO_LAYER_DEPLOY.read_text(encoding="utf-8")
+
+        self.assertIn("v_reporting_currency", sql)
+        self.assertIn("v_account_base_currency", sql)
+        self.assertIn("a.base_currency INTO v_account_id, v_account_base_currency", sql)
+        self.assertIn("v_account_base_currency <> v_reporting_currency", sql)
+        self.assertIn("base currency % does not match portfolio reporting currency %", sql)
+        mismatch_pos = sql.index("v_account_base_currency <> v_reporting_currency")
+        insert_pos = sql.index("INSERT INTO public.portfolio_accounts")
+        self.assertLess(mismatch_pos, insert_pos)
+
     def test_bridge_overlap_rejects_exact_duplicate_window(self) -> None:
         sql = PORTFOLIO_LAYER_DEPLOY.read_text(encoding="utf-8")
 

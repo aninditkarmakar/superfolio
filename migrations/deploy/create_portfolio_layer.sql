@@ -103,10 +103,12 @@ LANGUAGE plpgsql
 AS $$
 DECLARE
     v_portfolio_id UUID;
+    v_reporting_currency CHAR(3);
     v_account_id UUID;
+    v_account_base_currency CHAR(3);
     v_membership_id UUID;
 BEGIN
-    SELECT id INTO v_portfolio_id
+    SELECT id, reporting_currency INTO v_portfolio_id, v_reporting_currency
     FROM public.portfolios
     WHERE name = btrim(p_portfolio_name);
 
@@ -114,7 +116,7 @@ BEGIN
         RAISE EXCEPTION 'Unknown portfolio: %', p_portfolio_name;
     END IF;
 
-    SELECT a.id INTO v_account_id
+    SELECT a.id, a.base_currency INTO v_account_id, v_account_base_currency
     FROM public.accounts a
     JOIN public.brokerages b ON b.id = a.brokerage_id
     WHERE b.code = upper(btrim(p_brokerage_code))
@@ -122,6 +124,13 @@ BEGIN
 
     IF v_account_id IS NULL THEN
         RAISE EXCEPTION 'Unknown account: % %', p_brokerage_code, p_account_external_id;
+    END IF;
+    IF v_account_base_currency <> v_reporting_currency THEN
+        RAISE EXCEPTION 'Account % % base currency % does not match portfolio reporting currency %',
+            p_brokerage_code,
+            p_account_external_id,
+            v_account_base_currency,
+            v_reporting_currency;
     END IF;
 
     INSERT INTO public.portfolio_accounts (portfolio_id, account_id)

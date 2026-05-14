@@ -32,7 +32,7 @@ Use `connect_database()` to create the adapter from `DATABASE_URL` or an explici
 | Function | Purpose |
 | --- | --- |
 | `create_portfolio(...)` | Inserts a named portfolio with a reporting currency and returns the new id; returns the existing id if name and currency already match; raises an error if the name exists with a different reporting currency. |
-| `attach_portfolio_account(...)` | Attaches an existing registered brokerage account to a portfolio. |
+| `attach_portfolio_account(...)` | Attaches an existing registered brokerage account to a portfolio after validating that the account base currency matches the portfolio reporting currency. |
 | `create_portfolio_transfer_bridge(...)` | Adds an in-transit transfer bridge after validating portfolio membership, date order, currency, and overlapping bridge windows. |
 
 ## Ingestion run functions
