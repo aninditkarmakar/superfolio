@@ -69,10 +69,10 @@ class BuildChildSummaryTests(unittest.TestCase):
 
     def test_counts_reflect_supplied_values(self) -> None:
         result = build_child_summary(
-            cash_flows_supported=5,
-            cash_flows_inserted=3,
-            cash_flows_duplicates=1,
-            cash_flows_skipped_other_account=1,
+            cash_supported=5,
+            cash_inserted=3,
+            cash_duplicates=1,
+            cash_skipped_other_account=1,
         )
         rc = result["record_counts"]
         self.assertEqual(rc["cash_flows"]["supported"], 5)
@@ -133,14 +133,22 @@ class BuildParentSummaryTests(unittest.TestCase):
         self.assertEqual(result["account_counts"]["failed"], 1)
 
     def test_record_counts_aggregated_from_child_summaries(self) -> None:
-        child_a = build_child_summary(cash_flows_supported=3, cash_flows_inserted=2)
-        child_b = build_child_summary(cash_flows_supported=5, cash_flows_inserted=4)
+        child_a = build_child_summary(cash_supported=3, cash_inserted=2)
+        child_b = build_child_summary(cash_supported=5, cash_inserted=4)
         result = build_parent_summary(
             child_statuses=["succeeded", "succeeded"],
             child_summaries=[child_a, child_b],
         )
         self.assertEqual(result["record_counts"]["cash_flows"]["supported"], 8)
         self.assertEqual(result["record_counts"]["cash_flows"]["inserted"], 6)
+
+    def test_nav_aggregation_through_build_parent_summary(self) -> None:
+        child = build_child_summary(nav_supported=4)
+        result = build_parent_summary(
+            child_statuses=["succeeded"],
+            child_summaries=[child],
+        )
+        self.assertEqual(result["record_counts"]["daily_nav_snapshots"]["supported"], 4)
 
     def test_accepts_raw_record_counts_dicts(self) -> None:
         rc = empty_record_counts()
