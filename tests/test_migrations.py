@@ -274,6 +274,18 @@ class MigrationContractTests(unittest.TestCase):
         self.assertIn("SELECT btrim(requested.account_external_id)", sql)
         self.assertIn("btrim(requested.account_external_id) <> ''", sql)
 
+    def test_automation_layer_account_target_resolution_rejects_all_blank_external_ids(self) -> None:
+        sql = (MIGRATIONS_DIR / "deploy" / "create_automation_layer.sql").read_text(encoding="utf-8")
+
+        self.assertIn("IF NOT EXISTS (", sql)
+        self.assertIn("target_type=accounts requires at least one non-blank account_external_id", sql)
+
+    def test_automation_layer_stale_cleanup_requires_cutoff(self) -> None:
+        sql = (MIGRATIONS_DIR / "deploy" / "create_automation_layer.sql").read_text(encoding="utf-8")
+
+        self.assertIn("IF p_stale_before IS NULL THEN", sql)
+        self.assertIn("p_stale_before must not be NULL", sql)
+
 
 if __name__ == "__main__":
     unittest.main()

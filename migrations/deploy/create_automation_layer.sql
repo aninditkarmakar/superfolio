@@ -315,6 +315,14 @@ BEGIN
         RAISE EXCEPTION 'target_type=accounts requires account_external_ids';
     END IF;
 
+    IF NOT EXISTS (
+        SELECT 1
+        FROM unnest(p_account_external_ids) AS requested(account_external_id)
+        WHERE btrim(requested.account_external_id) <> ''
+    ) THEN
+        RAISE EXCEPTION 'target_type=accounts requires at least one non-blank account_external_id';
+    END IF;
+
     RETURN QUERY
     SELECT a.id, b.code::TEXT, a.external_id::TEXT, a.base_currency::TEXT, a.display_name::TEXT
     FROM public.accounts a
@@ -342,6 +350,10 @@ DECLARE
     v_child_count INTEGER;
     v_parent_count INTEGER;
 BEGIN
+    IF p_stale_before IS NULL THEN
+        RAISE EXCEPTION 'p_stale_before must not be NULL';
+    END IF;
+
     UPDATE public.automation_job_accounts
     SET status = 'failed',
         error_message = NULLIF(btrim(p_error_message), ''),
