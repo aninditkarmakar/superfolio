@@ -1627,5 +1627,198 @@ class AutomationLoadIngestionRunCleanupTests(unittest.TestCase):
                          "both ingestion runs must be completed (one failed, one succeeded)")
 
 
+class AutomationLoadCleanupExceptionEdgeCaseTests(unittest.TestCase):
+    """TDD tests for Task 13 final code-quality notes (Issue 1 & Issue 2).
+
+    Issue 1: cleanup complete_ingestion_run(failed) raising must not replace the original
+             bulk exception; original must propagate with cleanup context attached as a note.
+    Issue 2: success-path complete_ingestion_run is inside the try block; if it raises,
+             the except calls complete a second time (double-complete / misclassification).
+             Fix: move success complete outside try; call complete exactly once on success path.
+    """
+
+    _CASH_XML = (
+        '<FlexQueryResponse>'
+        '<CashTransaction accountId="U100" reportDate="20240115"'
+        ' dateTime="20240115;120000" currency="USD" amount="100.00"'
+        ' fxRateToBase="1" type="Deposits/Withdrawals" transactionID="CF1" />'
+        '</FlexQueryResponse>'
+    )
+
+    def _run(self, request, db, adapter=None):
+        from portfolio_engine.automation.orchestrator import run_automation
+        if adapter is None:
+            adapter = FakeAdapter()
+        return run_automation(request, database=db, adapter=adapter)
+
+    def _make_request(self, **kwargs):
+        from portfolio_engine.automation.types import AutomationRunRequest
+        defaults = dict(
+            target_type="accounts",
+            integration_key="ibkr_flex_ws",
+            mode="load",
+            requested_start_date=date(2024, 1, 1),
+            requested_end_date=date(2024, 1, 31),
+            account_external_ids=("U100",),
+        )
+        defaults.update(kwargs)
+        return AutomationRunRequest(**defaults)
+
+    def _make_account_target(self, *, account_id="account-uuid", external_id="U100"):
+        from portfolio_engine.database import AutomationAccountTarget
+        return AutomationAccountTarget(
+            account_id=account_id,
+            brokerage_code="IBKR",
+            account_external_id=external_id,
+            base_currency="USD",
+            display_name="Main",
+        )
+
+    def _make_cash_flow_adapter(self):
+        xml = self._CASH_XML
+
+        class CashFlowAdapter(FakeAdapter):
+            def fetch_payload(self, account, req, config):
+                from portfolio_engine.automation.types import BrokerPayload
+                return BrokerPayload(xml_text=xml, source_name="synthetic.xml")
+
+        return CashFlowAdapter()
+
+    # --- Issue 1 orchestrator-level test ---
+
+    def test_issue1_cleanup_failure_preserves_original_error_in_child(self):
+        """Issue 1: when bulk_ingest raises and complete_ingestion_run(failed) also raises,
+        the child must be finalized with the original bulk error, not the cleanup error."""
+        request = self._make_request()
+        db = FakeAutomationDatabase()
+        db.account_targets = [self._make_account_target()]
+
+        def raising_bulk(ingestion_run_id, records):
+            raise RuntimeError("cash failed")
+
+        def raising_complete_on_failed(*, ingestion_run_id, status, error_message):
+            if status == "failed":
+                raise RuntimeError("cleanup failed")
+
+        db.bulk_ingest_cash_flows = raising_bulk  # type: ignore
+        db.complete_ingestion_run = raising_complete_on_failed  # type: ignore
+
+        result = self._run(request, db, adapter=self._make_cash_flow_adapter())
+
+        self.assertEqual(result.status, "failed")
+        self.assertEqual(len(db.finalized_children), 1)
+        child_fin = db.finalized_children[0]
+        self.assertEqual(child_fin.status, "failed")
+        # Original bulk error must appear in the child error message
+        self.assertIn("cash failed", child_fin.error_message or "")
+        # Cleanup error must NOT replace the original
+        self.assertNotIn("cleanup failed", child_fin.error_message or "")
+
+    # --- Issue 1 load_payload unit-level test ---
+
+    def test_issue1_load_payload_reraises_original_with_cleanup_note(self):
+        """Issue 1 (load_payload unit): when bulk raises and cleanup complete also raises,
+        the original exception is re-raised with a note about the cleanup failure."""
+        from portfolio_engine.automation.ingestion import load_payload
+
+        db = FakeAutomationDatabase()
+
+        def raising_bulk(ingestion_run_id, records):
+            raise RuntimeError("cash failed")
+
+        def raising_complete_on_failed(*, ingestion_run_id, status, error_message):
+            if status == "failed":
+                raise RuntimeError("cleanup failed")
+
+        db.bulk_ingest_cash_flows = raising_bulk  # type: ignore
+        db.complete_ingestion_run = raising_complete_on_failed  # type: ignore
+
+        with self.assertRaises(RuntimeError) as ctx:
+            load_payload(
+                self._CASH_XML,
+                database=db,
+                brokerage_code="IBKR",
+                account_external_id="U100",
+                source_type="FLEX_WEB_SERVICE",
+                source_name="test.xml",
+                start_date="2024-01-01",
+                end_date="2024-01-31",
+            )
+
+        exc = ctx.exception
+        # The original exception must propagate (not the cleanup one)
+        self.assertIn("cash failed", str(exc))
+        # Cleanup context must be attached as a note on the original exception
+        notes = getattr(exc, "__notes__", None) or []
+        self.assertTrue(
+            any("cleanup failed" in note for note in notes),
+            f"Expected cleanup context in __notes__ but got: {notes!r}",
+        )
+
+    # --- Issue 2 orchestrator-level test ---
+
+    def test_issue2_success_complete_failure_not_retried_child_finalized_failed(self):
+        """Issue 2: when success complete_ingestion_run raises, it must not be retried with
+        failed status; complete must be called exactly once, child finalized failed."""
+        request = self._make_request()
+        db = FakeAutomationDatabase()
+        db.account_targets = [self._make_account_target()]
+
+        complete_calls: list[str] = []
+
+        def always_raising_complete(*, ingestion_run_id, status, error_message):
+            complete_calls.append(status)
+            raise RuntimeError("completion failed")
+
+        db.complete_ingestion_run = always_raising_complete  # type: ignore
+
+        # Default adapter returns empty XML — no bulk calls, success path hits complete
+        result = self._run(request, db)
+
+        # complete_ingestion_run must be called exactly once (success path, not retried)
+        self.assertEqual(len(complete_calls), 1,
+                         f"Expected exactly 1 complete call but got statuses: {complete_calls}")
+        self.assertEqual(result.status, "failed")
+        self.assertEqual(len(db.finalized_children), 1)
+        child_fin = db.finalized_children[0]
+        self.assertEqual(child_fin.status, "failed")
+        self.assertIn("completion failed", child_fin.error_message or "")
+
+    # --- Issue 2 load_payload unit-level test ---
+
+    def test_issue2_load_payload_success_complete_called_exactly_once(self):
+        """Issue 2 (load_payload unit): when success complete_ingestion_run raises,
+        it must not be retried; the exception propagates directly."""
+        from portfolio_engine.automation.ingestion import load_payload
+
+        db = FakeAutomationDatabase()
+
+        complete_calls: list[str] = []
+
+        def always_raising_complete(*, ingestion_run_id, status, error_message):
+            complete_calls.append(status)
+            raise RuntimeError("completion failed")
+
+        db.complete_ingestion_run = always_raising_complete  # type: ignore
+
+        # Empty XML — no bulk calls; success-path complete raises
+        with self.assertRaises(RuntimeError) as ctx:
+            load_payload(
+                "<FlexQueryResponse></FlexQueryResponse>",
+                database=db,
+                brokerage_code="IBKR",
+                account_external_id="U100",
+                source_type="FLEX_WEB_SERVICE",
+                source_name="test.xml",
+                start_date="2024-01-01",
+                end_date="2024-01-31",
+            )
+
+        self.assertIn("completion failed", str(ctx.exception))
+        # Must be called exactly once — no retry with "failed" status
+        self.assertEqual(len(complete_calls), 1,
+                         f"Expected exactly 1 complete call but got statuses: {complete_calls}")
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -84,19 +84,22 @@ def load_payload(
             if status == "partially_succeeded"
             else None
         )
-
-        database.complete_ingestion_run(
-            ingestion_run_id=ingestion_run_id,
-            status=status,
-            error_message=message,
-        )
     except Exception as exc:
-        database.complete_ingestion_run(
-            ingestion_run_id=ingestion_run_id,
-            status="failed",
-            error_message=sanitize_error_message(str(exc)),
-        )
+        try:
+            database.complete_ingestion_run(
+                ingestion_run_id=ingestion_run_id,
+                status="failed",
+                error_message=sanitize_error_message(str(exc)),
+            )
+        except Exception as cleanup_exc:
+            exc.add_note(f"additionally, cleanup complete_ingestion_run raised: {cleanup_exc}")
         raise
+
+    database.complete_ingestion_run(
+        ingestion_run_id=ingestion_run_id,
+        status=status,
+        error_message=message,
+    )
 
     child_summary = build_child_summary(
         cash_supported=analysis.cash_flow_count,
