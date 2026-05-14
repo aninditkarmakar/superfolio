@@ -102,7 +102,7 @@ Stores one user-triggered or future scheduled automation operation. Manual jobs 
 
 Stores the resolved account snapshot for one automation job. Each row tracks account-level status, optional linked `ingestion_runs.id` for load mode, sanitized child summary counts, and sanitized error message. Dry-run rows leave `ingestion_run_id` null.
 
-For load mode, active pending or running load jobs for the same integration and account whose requested date range overlaps the new job's range block new load attempts. Overlap is evaluated inclusively on both ends before the job is created.
+For load mode, active pending or running load jobs for the same integration and account whose requested date range overlaps the new job's range block new load attempts. The parent `automation_jobs` row and all child `automation_job_accounts` rows are created first; overlap is then evaluated per-account during execution by `has_overlapping_automation_load`, which excludes the current job id from the check. Accounts found to overlap are set to `failed` with `error_category="overlapping_load_job"` in the child summary JSON.
 
 ### `portfolio_transfer_bridges`
 

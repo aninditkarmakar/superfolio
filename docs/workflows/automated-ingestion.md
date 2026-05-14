@@ -31,6 +31,8 @@ These must be configured as repository secrets before triggering the workflow.
 
 ## Behavior
 
+> **⚠️ Adapter fetch not yet implemented.** `IbkrFlexWebServiceAdapter.fetch_payload()` currently raises `NotImplementedError`. The full IBKR Flex Web Service HTTP fetch (token exchange, polling, XML retrieval) is out of scope for the current infrastructure release. Target resolution, overlap detection, lifecycle tracking, per-account summaries, and workflow/CLI infrastructure are all functional, but no broker payloads are fetched or written by the `ibkr_flex_ws` adapter yet. The dry-run and load semantics below describe intended behavior once adapter fetch is implemented.
+
 ### Dry-run mode
 
 Dry-run records automation job metadata and per-account outcomes in `automation_jobs` and `automation_job_accounts` but does not create account-scoped `ingestion_runs` rows or write any normalized facts (cash flows, daily NAV snapshots). Use dry-run to validate target resolution and date range selection before committing a load.
@@ -39,7 +41,7 @@ Dry-run records automation job metadata and per-account outcomes in `automation_
 
 Load mode creates one account-scoped `ingestion_runs` row per resolved account, fetches supported Flex records through the `ibkr_flex_ws` integration, and writes normalized cash-flow and daily NAV records through the existing bulk ingestion functions. Each account-level outcome references its `ingestion_runs.id` for traceability.
 
-Load mode checks for overlap before processing each account: if an active pending or running load job for the same integration and account already covers an intersecting date range, that account is skipped with an `overlap_blocked` status rather than creating a duplicate run.
+Load mode checks for overlap during processing of each account: if an active pending or running load job for the same integration and account already covers an intersecting date range, that account's `automation_job_accounts` row is set to `failed` with `error_category="overlapping_load_job"` in the child summary JSON, rather than creating a duplicate run.
 
 ### Job outcomes
 
