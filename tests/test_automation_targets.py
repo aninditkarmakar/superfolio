@@ -57,6 +57,21 @@ class ValidateTargetInputsPortfolioTests(unittest.TestCase):
                 account_external_ids=(),
             )
         self.assertIn(
+            "target_type=portfolio requires portfolio_name",
+            str(ctx.exception),
+        )
+        # Must not imply the account_ids constraint also failed when it didn't.
+        self.assertNotIn("rejects account_external_ids", str(ctx.exception))
+
+    def test_portfolio_both_violations_raises_compound(self) -> None:
+        # Missing name AND account ids present → compound message.
+        with self.assertRaises(AutomationValidationError) as ctx:
+            validate_target_inputs(
+                target_type="portfolio",
+                portfolio_name=None,
+                account_external_ids=("U100",),
+            )
+        self.assertIn(
             "target_type=portfolio requires portfolio_name and rejects account_external_ids",
             str(ctx.exception),
         )
@@ -77,9 +92,11 @@ class ValidateTargetInputsPortfolioTests(unittest.TestCase):
                 account_external_ids=("U100",),
             )
         self.assertIn(
-            "target_type=portfolio requires portfolio_name and rejects account_external_ids",
+            "target_type=portfolio rejects account_external_ids",
             str(ctx.exception),
         )
+        # Must not imply the portfolio_name constraint also failed when it didn't.
+        self.assertNotIn("requires portfolio_name", str(ctx.exception))
 
     def test_portfolio_target_type_normalized(self) -> None:
         # Mixed case and whitespace should normalize to "portfolio"
@@ -106,6 +123,21 @@ class ValidateTargetInputsAccountsTests(unittest.TestCase):
                 account_external_ids=(),
             )
         self.assertIn(
+            "target_type=accounts requires account_external_ids",
+            str(ctx.exception),
+        )
+        # Must not imply the portfolio_name constraint also failed when it didn't.
+        self.assertNotIn("rejects portfolio_name", str(ctx.exception))
+
+    def test_accounts_both_violations_raises_compound(self) -> None:
+        # No account ids AND portfolio name present → compound message.
+        with self.assertRaises(AutomationValidationError) as ctx:
+            validate_target_inputs(
+                target_type="accounts",
+                portfolio_name="My Portfolio",
+                account_external_ids=(),
+            )
+        self.assertIn(
             "target_type=accounts requires account_external_ids and rejects portfolio_name",
             str(ctx.exception),
         )
@@ -118,9 +150,11 @@ class ValidateTargetInputsAccountsTests(unittest.TestCase):
                 account_external_ids=("U100",),
             )
         self.assertIn(
-            "target_type=accounts requires account_external_ids and rejects portfolio_name",
+            "target_type=accounts rejects portfolio_name",
             str(ctx.exception),
         )
+        # Must not imply the account_ids constraint also failed when it didn't.
+        self.assertNotIn("requires account_external_ids", str(ctx.exception))
 
     def test_accounts_blank_portfolio_name_treated_as_absent(self) -> None:
         # Blank portfolio_name should be treated as absent (not a conflict)
@@ -146,7 +180,13 @@ class ValidateTargetInputsInvalidTypeTests(unittest.TestCase):
                 portfolio_name=None,
                 account_external_ids=(),
             )
-        self.assertIn("target_type must be portfolio or accounts", str(ctx.exception))
+        # Message must include all valid target types from VALID_TARGET_TYPES.
+        msg = str(ctx.exception)
+        self.assertIn("target_type must be", msg)
+        self.assertIn("portfolio", msg)
+        self.assertIn("accounts", msg)
+        # Exact string expected for the current constant.
+        self.assertIn("target_type must be portfolio or accounts", msg)
 
     def test_empty_target_type_raises(self) -> None:
         with self.assertRaises(AutomationValidationError):
