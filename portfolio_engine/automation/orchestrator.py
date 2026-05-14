@@ -7,7 +7,7 @@ from typing import Any
 
 from portfolio_engine.automation.adapters import get_adapter
 from portfolio_engine.automation.config import load_integration_config
-from portfolio_engine.automation.ingestion import dry_run_payload
+from portfolio_engine.automation.ingestion import dry_run_payload, load_payload
 from portfolio_engine.automation.sanitization import sanitize_error_message
 from portfolio_engine.automation.summary import build_child_summary, build_parent_summary
 from portfolio_engine.automation.targets import AutomationValidationError, validate_target_inputs
@@ -178,24 +178,46 @@ def run_automation(request: AutomationRunRequest, *, database, adapter=None) -> 
             child_statuses.append("succeeded")
             child_summaries.append(child_summary)
     else:
-        # Task 13 will implement load mode execution.
-        error_message = "load mode not implemented yet"
-        empty_summary = build_parent_summary([], [])
-        database.finalize_automation_job(
-            AutomationJobFinalize(
-                automation_job_id=job_id,
-                status="failed",
-                summary=empty_summary,
-                error_message=error_message,
+        for child_id, account in child_pairs:
+            database.mark_automation_job_account_running(child_id)
+            try:
+                payload = adapter.fetch_payload(account, request, config)
+                ingestion_run_id, child_status, child_summary, child_message = load_payload(
+                    payload.xml_text,
+                    database=database,
+                    brokerage_code=config.brokerage_code,
+                    account_external_id=account.account_external_id,
+                    source_type=config.source_type,
+                    source_name=payload.source_name,
+                    start_date=str(request.requested_start_date),
+                    end_date=str(request.requested_end_date),
+                )
+            except Exception as exc:
+                error_message = sanitize_error_message(str(exc))
+                failed_child_summary = build_child_summary(error_category="fetch_or_parse_error")
+                database.finalize_automation_job_account(
+                    AutomationJobAccountFinalize(
+                        automation_job_account_id=child_id,
+                        status="failed",
+                        ingestion_run_id=None,
+                        summary=failed_child_summary,
+                        error_message=error_message,
+                    )
+                )
+                child_statuses.append("failed")
+                child_summaries.append(failed_child_summary)
+                continue
+            database.finalize_automation_job_account(
+                AutomationJobAccountFinalize(
+                    automation_job_account_id=child_id,
+                    status=child_status,
+                    ingestion_run_id=ingestion_run_id,
+                    summary=child_summary,
+                    error_message=child_message,
+                )
             )
-        )
-        return AutomationRunResult(
-            automation_job_id=job_id,
-            status="failed",
-            summary=empty_summary,
-            error_message=error_message,
-            automation_job_account_ids=tuple(child_ids),
-        )
+            child_statuses.append(child_status)
+            child_summaries.append(child_summary)
 
     parent_status = _derive_parent_status(child_statuses)
     parent_summary = build_parent_summary(child_statuses, child_summaries)
