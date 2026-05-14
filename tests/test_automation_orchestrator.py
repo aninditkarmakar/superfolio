@@ -1921,5 +1921,286 @@ class AutomationLoadCleanupExceptionEdgeCaseTests(unittest.TestCase):
         self.assertEqual(db.completed_ingestion_runs[0][1], "failed")
 
 
+# ---------------------------------------------------------------------------
+# Task 14: Per-account error isolation and parent aggregation
+# ---------------------------------------------------------------------------
+
+
+class FailingOneAccountAdapter(FakeAdapter):
+    """Adapter that fails for U200 with a message containing a secret token."""
+
+    def fetch_payload(self, account, request, config):
+        if account.account_external_id == "U200":
+            raise RuntimeError("token=secret failed")
+        return super().fetch_payload(account, request, config)
+
+
+class AutomationOrchestratorAccountIsolationTests(unittest.TestCase):
+    """Task 14: Per-account error isolation, parent aggregation, and sanitization."""
+
+    def _run(self, request, db, adapter=None):
+        from portfolio_engine.automation.orchestrator import run_automation
+        if adapter is None:
+            adapter = FakeAdapter()
+        return run_automation(request, database=db, adapter=adapter)
+
+    def _make_request(self, *, mode="dry-run", account_external_ids=("U100", "U200"), **kwargs):
+        from portfolio_engine.automation.types import AutomationRunRequest
+        defaults = dict(
+            target_type="accounts",
+            integration_key="ibkr_flex_ws",
+            mode=mode,
+            requested_start_date=date(2024, 1, 1),
+            requested_end_date=date(2024, 1, 31),
+            account_external_ids=account_external_ids,
+        )
+        defaults.update(kwargs)
+        return AutomationRunRequest(**defaults)
+
+    def _make_account_target(self, *, account_id, external_id):
+        from portfolio_engine.database import AutomationAccountTarget
+        return AutomationAccountTarget(
+            account_id=account_id,
+            brokerage_code="IBKR",
+            account_external_id=external_id,
+            base_currency="USD",
+            display_name=f"Account {external_id}",
+        )
+
+    def _make_two_account_db(self):
+        db = FakeAutomationDatabase()
+        db.account_targets = [
+            self._make_account_target(account_id="acct-u100", external_id="U100"),
+            self._make_account_target(account_id="acct-u200", external_id="U200"),
+        ]
+        return db
+
+    # ------------------------------------------------------------------
+    # Minimum test from plan: FailingOneAccountAdapter with U100/U200 dry-run
+    # ------------------------------------------------------------------
+
+    def test_account_failure_does_not_stop_other_accounts(self):
+        """U200 fetch fails; U100 succeeds. Both children finalized, parent partially_succeeded.
+        The failed child error_message must not contain the raw secret value.
+        """
+        request = self._make_request()
+        db = self._make_two_account_db()
+
+        result = self._run(request, db, adapter=FailingOneAccountAdapter())
+
+        # Parent must be partially_succeeded (mixed success/failure)
+        self.assertEqual(result.status, "partially_succeeded")
+
+        # Both children must be finalized
+        self.assertEqual(len(db.finalized_children), 2)
+
+        # Find the failed child (U200 maps to child-2)
+        finalized_by_id = {f.automation_job_account_id: f for f in db.finalized_children}
+        failed_child = finalized_by_id["child-2"]
+        succeeded_child = finalized_by_id["child-1"]
+
+        self.assertEqual(failed_child.status, "failed")
+        self.assertEqual(succeeded_child.status, "succeeded")
+
+        # Error message must not leak the secret
+        self.assertIsNotNone(failed_child.error_message)
+        self.assertNotIn("secret", failed_child.error_message or "")
+
+    # ------------------------------------------------------------------
+    # Successful account still contributes to summary
+    # ------------------------------------------------------------------
+
+    def test_account_failure_successful_account_contributes_to_parent_summary(self):
+        """When U200 fails and U100 succeeds, parent account_counts reflect 1 succeeded, 1 failed."""
+        request = self._make_request()
+        db = self._make_two_account_db()
+
+        result = self._run(request, db, adapter=FailingOneAccountAdapter())
+
+        counts = result.summary["account_counts"]
+        self.assertEqual(counts["total"], 2)
+        self.assertEqual(counts["succeeded"], 1)
+        self.assertEqual(counts["failed"], 1)
+
+    # ------------------------------------------------------------------
+    # Failed child summary: stable zero record_counts shape and error_category
+    # ------------------------------------------------------------------
+
+    def test_failed_child_summary_has_zero_record_counts_and_error_category(self):
+        """Failed child (U200) must have record_counts with zero values and error_category set."""
+        request = self._make_request()
+        db = self._make_two_account_db()
+
+        self._run(request, db, adapter=FailingOneAccountAdapter())
+
+        finalized_by_id = {f.automation_job_account_id: f for f in db.finalized_children}
+        failed_child = finalized_by_id["child-2"]
+
+        summary = failed_child.summary
+        self.assertIsInstance(summary, dict)
+        self.assertIn("record_counts", summary)
+        self.assertIn("error_category", summary)
+
+        # All record counts must be zero
+        for _rt, counts in summary["record_counts"].items():
+            for key, val in counts.items():
+                self.assertEqual(val, 0, f"record_counts[{_rt}][{key}] must be 0 for failed child")
+
+    # ------------------------------------------------------------------
+    # All accounts failing → parent failed
+    # ------------------------------------------------------------------
+
+    def test_all_accounts_failing_yields_parent_failed(self):
+        """When all accounts fail, parent status must be failed (not partially_succeeded)."""
+        request = self._make_request(account_external_ids=("U200", "U300"))
+        db = FakeAutomationDatabase()
+        db.account_targets = [
+            self._make_account_target(account_id="acct-u200", external_id="U200"),
+            self._make_account_target(account_id="acct-u300", external_id="U300"),
+        ]
+
+        class AlwaysFailAdapter(FakeAdapter):
+            def fetch_payload(self, account, request, config):
+                raise RuntimeError("all accounts fail")
+
+        result = self._run(request, db, adapter=AlwaysFailAdapter())
+
+        self.assertEqual(result.status, "failed")
+        self.assertEqual(len(db.finalized_children), 2)
+        for child_fin in db.finalized_children:
+            self.assertEqual(child_fin.status, "failed")
+
+    def test_all_accounts_failing_parent_account_counts(self):
+        """All-fail: parent account_counts.failed == total and succeeded == 0."""
+        request = self._make_request(account_external_ids=("U200", "U300"))
+        db = FakeAutomationDatabase()
+        db.account_targets = [
+            self._make_account_target(account_id="acct-u200", external_id="U200"),
+            self._make_account_target(account_id="acct-u300", external_id="U300"),
+        ]
+
+        class AlwaysFailAdapter(FakeAdapter):
+            def fetch_payload(self, account, request, config):
+                raise RuntimeError("all accounts fail")
+
+        result = self._run(request, db, adapter=AlwaysFailAdapter())
+
+        counts = result.summary["account_counts"]
+        self.assertEqual(counts["total"], 2)
+        self.assertEqual(counts["failed"], 2)
+        self.assertEqual(counts["succeeded"], 0)
+
+    # ------------------------------------------------------------------
+    # Load mode: one account-level load failure, one success → partially_succeeded
+    # ------------------------------------------------------------------
+
+    def test_load_mode_one_account_fetch_fails_one_succeeds_partially_succeeded(self):
+        """Load mode: U200 fetch fails, U100 succeeds → parent partially_succeeded; both children finalized."""
+        request = self._make_request(mode="load")
+        db = self._make_two_account_db()
+
+        result = self._run(request, db, adapter=FailingOneAccountAdapter())
+
+        self.assertEqual(result.status, "partially_succeeded")
+        self.assertEqual(len(db.finalized_children), 2)
+
+        finalized_by_id = {f.automation_job_account_id: f for f in db.finalized_children}
+        self.assertEqual(finalized_by_id["child-1"].status, "succeeded")
+        self.assertEqual(finalized_by_id["child-2"].status, "failed")
+
+    def test_load_mode_all_accounts_fail_parent_failed(self):
+        """Load mode: all accounts fail → parent failed."""
+        request = self._make_request(mode="load")
+        db = self._make_two_account_db()
+
+        class AlwaysFailAdapter(FakeAdapter):
+            def fetch_payload(self, account, request, config):
+                raise RuntimeError("load network timeout")
+
+        result = self._run(request, db, adapter=AlwaysFailAdapter())
+
+        self.assertEqual(result.status, "failed")
+        self.assertEqual(len(db.finalized_children), 2)
+
+    # ------------------------------------------------------------------
+    # Sanitization: various sensitive patterns in error messages
+    # ------------------------------------------------------------------
+
+    def test_sanitization_redacts_token_assignment_in_child_error(self):
+        """token=<value> in fetch exception message is redacted in child error_message."""
+        request = self._make_request(account_external_ids=("U200",))
+        db = FakeAutomationDatabase()
+        db.account_targets = [self._make_account_target(account_id="acct-u200", external_id="U200")]
+
+        result = self._run(request, db, adapter=FailingOneAccountAdapter())
+
+        child_fin = db.finalized_children[0]
+        self.assertIsNotNone(child_fin.error_message)
+        # "token=secret" must have been redacted
+        self.assertNotIn("secret", child_fin.error_message or "")
+        self.assertNotIn("token=secret", child_fin.error_message or "")
+
+    def test_sanitization_redacts_password_in_child_error(self):
+        """password=<value> in fetch exception message is redacted in child error_message."""
+        request = self._make_request(account_external_ids=("U100",))
+        db = FakeAutomationDatabase()
+        db.account_targets = [self._make_account_target(account_id="acct-u100", external_id="U100")]
+
+        class PasswordLeakAdapter(FakeAdapter):
+            def fetch_payload(self, account, request, config):
+                raise RuntimeError("authentication failed: password=hunter2")
+
+        result = self._run(request, db, adapter=PasswordLeakAdapter())
+
+        child_fin = db.finalized_children[0]
+        self.assertIsNotNone(child_fin.error_message)
+        self.assertNotIn("hunter2", child_fin.error_message or "")
+
+    def test_sanitization_redacts_database_url_in_child_error(self):
+        """postgresql:// connection strings in fetch exception are redacted in child error_message."""
+        request = self._make_request(account_external_ids=("U100",))
+        db = FakeAutomationDatabase()
+        db.account_targets = [self._make_account_target(account_id="acct-u100", external_id="U100")]
+
+        class DbUrlLeakAdapter(FakeAdapter):
+            def fetch_payload(self, account, request, config):
+                raise RuntimeError("connect failed: postgresql://user:pass@host:5432/db")
+
+        result = self._run(request, db, adapter=DbUrlLeakAdapter())
+
+        child_fin = db.finalized_children[0]
+        self.assertIsNotNone(child_fin.error_message)
+        self.assertNotIn("postgresql://", child_fin.error_message or "")
+        self.assertNotIn("pass", child_fin.error_message or "")
+
+    # ------------------------------------------------------------------
+    # Precise contract: failed child error_category value
+    # ------------------------------------------------------------------
+
+    def test_failed_child_error_category_is_fetch_or_parse_error(self):
+        """Failed child (U200) summary error_category must be 'fetch_or_parse_error' (not a generic value).
+        This test would fail if the error_category key were missing or had a wrong value.
+        """
+        request = self._make_request()
+        db = self._make_two_account_db()
+
+        self._run(request, db, adapter=FailingOneAccountAdapter())
+
+        finalized_by_id = {f.automation_job_account_id: f for f in db.finalized_children}
+        failed_child = finalized_by_id["child-2"]
+        self.assertEqual(failed_child.summary.get("error_category"), "fetch_or_parse_error")
+
+    def test_succeeded_child_has_no_error_category(self):
+        """Succeeded child (U100) summary must not have an error_category key."""
+        request = self._make_request()
+        db = self._make_two_account_db()
+
+        self._run(request, db, adapter=FailingOneAccountAdapter())
+
+        finalized_by_id = {f.automation_job_account_id: f for f in db.finalized_children}
+        succeeded_child = finalized_by_id["child-1"]
+        self.assertNotIn("error_category", succeeded_child.summary)
+
+
 if __name__ == "__main__":
     unittest.main()
