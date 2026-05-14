@@ -152,5 +152,23 @@ class TestIbkrFlexWebServiceAdapterFetchPayload(unittest.TestCase):
         self.assertIn("follow-up", str(ctx.exception))
 
 
+class AutomationAdapterTests(unittest.TestCase):
+    """Named class required by the spec verification command."""
+
+    def test_get_ibkr_adapter(self):
+        from portfolio_engine.automation.adapters import get_adapter
+        adapter = get_adapter("ibkr_flex_ws")
+        self.assertEqual(type(adapter).__name__, "IbkrFlexWebServiceAdapter")
+
+    def test_ibkr_adapter_preflight_requires_env_keys(self):
+        from portfolio_engine.automation.adapters import get_adapter
+        with mock.patch.dict(os.environ, {}, clear=True):
+            with self.assertRaises(RuntimeError) as ctx:
+                get_adapter("ibkr_flex_ws").preflight_validate_config(
+                    load_integration_config("ibkr_flex_ws")
+                )
+        self.assertIn("missing required environment variables", str(ctx.exception))
+
+
 if __name__ == "__main__":
     unittest.main()
