@@ -133,7 +133,7 @@ class MigrationContractTests(unittest.TestCase):
 
 
     def test_automation_layer_is_registered_after_portfolio_layer(self) -> None:
-        plan = Path("migrations/sqitch.plan").read_text(encoding="utf-8")
+        plan = (MIGRATIONS_DIR / "sqitch.plan").read_text(encoding="utf-8")
 
         portfolio_pos = plan.index("create_portfolio_layer")
         automation_pos = plan.index("create_automation_layer")
@@ -142,9 +142,9 @@ class MigrationContractTests(unittest.TestCase):
 
     def test_automation_layer_migration_files_exist(self) -> None:
         for path in (
-            Path("migrations/deploy/create_automation_layer.sql"),
-            Path("migrations/revert/create_automation_layer.sql"),
-            Path("migrations/verify/create_automation_layer.sql"),
+            MIGRATIONS_DIR / "deploy" / "create_automation_layer.sql",
+            MIGRATIONS_DIR / "revert" / "create_automation_layer.sql",
+            MIGRATIONS_DIR / "verify" / "create_automation_layer.sql",
         ):
             self.assertTrue(path.exists(), f"missing {path}")
 
