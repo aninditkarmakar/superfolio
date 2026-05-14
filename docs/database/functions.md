@@ -16,6 +16,15 @@ SuperFolio uses PostgreSQL functions as the database mutation boundary for accou
 | `create_portfolio(...)` | `public.create_portfolio(...)` |
 | `attach_portfolio_account(...)` | `public.attach_portfolio_account(...)` |
 | `create_portfolio_transfer_bridge(...)` | `public.create_portfolio_transfer_bridge(...)` |
+| `create_automation_job(...)` | `public.create_automation_job(...)` |
+| `finalize_automation_job(...)` | `public.finalize_automation_job(...)` |
+| `add_automation_job_account(...)` | `public.add_automation_job_account(...)` |
+| `mark_automation_job_account_running(...)` | `public.mark_automation_job_account_running(...)` |
+| `finalize_automation_job_account(...)` | `public.finalize_automation_job_account(...)` |
+| `resolve_automation_portfolio_accounts(...)` | `public.resolve_automation_portfolio_accounts(...)` |
+| `resolve_automation_account_targets(...)` | `public.resolve_automation_account_targets(...)` |
+| `fail_stale_automation_runs(...)` | `public.fail_stale_automation_runs(...)` |
+| `has_overlapping_automation_load(...)` | `public.has_overlapping_automation_load(...)` |
 
 Use `connect_database()` to create the adapter from `DATABASE_URL` or an explicit database URL.
 
@@ -121,3 +130,31 @@ Bulk return fields:
 ## Error handling
 
 Malformed JSON, invalid casts, missing required function inputs, unknown ingestion runs, and source-record integrity mismatches raise errors. Unknown or inactive accounts are represented as skipped record statuses so one bulk call can report account-level misses without aborting all records.
+
+## Automation functions
+
+Automation functions manage the full lifecycle of a parent automation job and its per-account child outcomes.
+
+**Lifecycle:**
+
+| Function | Purpose |
+| --- | --- |
+| `create_automation_job(...)` | Creates a new `pending` automation job row with target type, integration, mode, and requested date range. Returns the new job id. |
+| `finalize_automation_job(...)` | Transitions the parent job to `succeeded`, `partially_succeeded`, or `failed` and records a sanitized summary and optional error message. |
+| `add_automation_job_account(...)` | Appends a `pending` per-account child row to an automation job. |
+| `mark_automation_job_account_running(...)` | Transitions a child account row to `running`. |
+| `finalize_automation_job_account(...)` | Finalizes a child account row with a terminal status, optional `ingestion_run_id` (load mode only), sanitized summary counts, and optional error message. |
+
+**Target resolution:**
+
+| Function | Purpose |
+| --- | --- |
+| `resolve_automation_portfolio_accounts(...)` | Returns the set of active accounts belonging to a named portfolio for use as automation targets. |
+| `resolve_automation_account_targets(...)` | Resolves a list of external account ids to their registered account rows for use as automation targets. |
+
+**Stale cleanup and overlap detection:**
+
+| Function | Purpose |
+| --- | --- |
+| `fail_stale_automation_runs(...)` | Marks pending or running automation jobs and their child account rows as `failed` when they have been stuck beyond a configurable staleness threshold. Called at the start of each workflow run. |
+| `has_overlapping_automation_load(...)` | Returns true when an active pending or running load job for the same integration and account has a requested date range that overlaps (inclusive on both ends) the proposed range, excluding the current automation job id. Used to block duplicate load attempts. |

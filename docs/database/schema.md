@@ -1,6 +1,6 @@
 # Database Schema
 
-This document describes the PostgreSQL schema deployed across two migrations: `migrations/deploy/create_mvp_schema.sql` (account registration, ingestion runs, source records, cash flows, and daily NAV snapshots) and `migrations/deploy/create_portfolio_layer.sql` (portfolios, portfolio accounts, and transfer bridges). The schema stores account-scoped IBKR Flex ingestion data, deduplicates broker-origin records, keeps raw source records separate from normalized portfolio facts, and supports logical portfolio groupings across multiple accounts.
+This document describes the PostgreSQL schema deployed across three migrations: `migrations/deploy/create_mvp_schema.sql` (account registration, ingestion runs, source records, cash flows, and daily NAV snapshots), `migrations/deploy/create_portfolio_layer.sql` (portfolios, portfolio accounts, and transfer bridges), and `migrations/deploy/create_automation_layer.sql` (automation jobs and per-account job outcomes). The schema stores account-scoped IBKR Flex ingestion data, deduplicates broker-origin records, keeps raw source records separate from normalized portfolio facts, supports logical portfolio groupings across multiple accounts, and tracks parent automation job lifecycle and per-account outcomes for manual and future scheduled ingestion runs.
 
 ## Relationship overview
 
@@ -16,6 +16,8 @@ erDiagram
     PORTFOLIOS ||--o{ PORTFOLIO_ACCOUNTS : contains
     ACCOUNTS ||--o{ PORTFOLIO_ACCOUNTS : member_of
     PORTFOLIOS ||--o{ PORTFOLIO_TRANSFER_BRIDGES : defines
+    AUTOMATION_JOBS ||--o{ AUTOMATION_JOB_ACCOUNTS : contains
+    INGESTION_RUNS ||--o| AUTOMATION_JOB_ACCOUNTS : linked_by
 ```
 
 ## Tables
@@ -91,6 +93,16 @@ Stores saved portfolio calculation/view definitions. A portfolio has a unique na
 ### `portfolio_accounts`
 
 Stores many-to-many membership between portfolios and brokerage accounts. An account can belong to multiple portfolios when its base currency matches the portfolio reporting currency. Inactive accounts still contribute historical data when they are members.
+
+### `automation_jobs`
+
+Stores one user-triggered or future scheduled automation operation. Manual jobs require a requested start and end date, record the target type (`portfolio` or `accounts`), selected integration, mode (`dry-run` or `load`), status, sanitized parent summary, and sanitized error message.
+
+### `automation_job_accounts`
+
+Stores the resolved account snapshot for one automation job. Each row tracks account-level status, optional linked `ingestion_runs.id` for load mode, sanitized child summary counts, and sanitized error message. Dry-run rows leave `ingestion_run_id` null.
+
+For load mode, active pending or running load jobs for the same integration and account whose requested date range overlaps the new job's range block new load attempts. Overlap is evaluated inclusively on both ends before the job is created.
 
 ### `portfolio_transfer_bridges`
 

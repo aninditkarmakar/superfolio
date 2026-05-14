@@ -23,21 +23,23 @@ The current implementation is Python-first, with the TypeScript UI/API still pla
 | :--- | :--- | :--- |
 | **Data Engine** | Python 3.12 | ✅ Implemented |
 | **Database** | PostgreSQL + Sqitch migrations | ✅ Implemented |
+| **Automation** | GitHub Actions (manual trigger) | ✅ Infrastructure implemented |
 | **API** | Next.js Route Handlers | 🗓 Planned |
 | **Frontend** | Next.js + Tremor.so | 🗓 Planned |
-| **Automation** | GitHub Actions | 🗓 Planned |
+| **Scheduled Automation** | GitHub Actions (cron) | 🗓 Planned |
 | **Hosting** | Vercel | 🗓 Planned |
 
 ## 📂 Project Structure
 
 ```
-portfolio_engine/        # Python parsing, ingestion, database, and TWR engine
+portfolio_engine/        # Python parsing, ingestion, database, TWR engine, and automation
   models.py              # CashFlow, NavSnapshot, TwrRow dataclasses
   flex_xml.py            # IBKR Flex XML parsers (CashTransaction, EquitySummaryByReportDateInBase)
   twr.py                 # Daily Valuation TWR math with configurable flow timing
   csv_export.py          # CSV writer for daily TWR output
   database.py            # PostgreSQL function-call adapter
   ingestion/             # Flex XML dry-run and database payload mappers
+  automation/            # Automated ingestion orchestration, CLI, adapters, and target resolution
 
 scripts/
   calculate_twr.py                       # End-to-end CLI: Flex XML -> TWR -> optional CSV export
@@ -46,6 +48,7 @@ scripts/
   manage_portfolio.py                    # Portfolio management CLI: create, attach-account, create-bridge
   register_account.py                    # Register a brokerage account before ingestion
   ingest_flex_file.py                    # Dry-run or load supported Flex XML records
+  run_automated_ingestion.py             # Automated ingestion CLI: manual workflow trigger entry point
 
 migrations/
   deploy/                # Sqitch deploy scripts
@@ -363,8 +366,9 @@ See [`docs/database/schema.md`](docs/database/schema.md) and [`docs/database/fun
 
 - [x] **PostgreSQL Schema + Manual Ingestion:** Persist supported Flex records to PostgreSQL with idempotent upserts.
 - [x] **Portfolio Layer:** Group registered accounts and calculate portfolio-level TWR with transfer bridge support.
+- [x] **Manual Automation Infrastructure:** Parent automation jobs, account-level outcomes, and manual GitHub Actions trigger for broker ingestion testing.
+- [ ] **Scheduled GitHub Actions Automation:** Scheduled daily Flex XML fetch and TWR recalculation.
 - [ ] **Next.js Dashboard:** Dense, scan-friendly chart UI displaying TWR curve and holding weightings.
-- [ ] **GitHub Actions Automation:** Scheduled daily Flex XML fetch and TWR recalculation.
 - [ ] **Alpha Attribution:** Decompose returns by sector and timing.
 - [ ] **Public Trade Feed:** Recent executions and per-trade P&L (redacted to percentages).
 - [ ] **Multi-Broker Integration:** Expand beyond IBKR using the established schema.
