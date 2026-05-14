@@ -214,6 +214,7 @@ class FakeAutomationDatabase:
 
     def get_portfolio_id_by_name(self, portfolio_name: str) -> str | None:
         """Return the portfolio UUID for the given active portfolio name, or None if not found."""
+        self._event_log.append("lookup_portfolio")
         self.portfolio_id_lookup_calls.append(portfolio_name)
         return self.portfolio_id_by_name.get(portfolio_name)
 
@@ -2558,10 +2559,10 @@ class PortfolioJobPortfolioIdResolutionTests(unittest.TestCase):
 
         self.assertEqual(len(db.portfolio_id_lookup_calls), 1)
         self.assertEqual(db.portfolio_id_lookup_calls[0], "MyPortfolio")
-        # Verify ordering: lookup happened before create_job
-        lookup_idx = db._event_log.index("create_job")
-        # lookup happens before create_job (not in event log itself, but create_job must appear)
-        self.assertGreater(lookup_idx, -1, "create_job must appear in event log after lookup")
+        # Verify ordering: lookup_portfolio must appear before create_job in the event log
+        lookup_idx = db._event_log.index("lookup_portfolio")
+        create_idx = db._event_log.index("create_job")
+        self.assertLess(lookup_idx, create_idx, "portfolio lookup must occur before job creation")
 
     def test_portfolio_unknown_portfolio_raises_before_job_creation(self):
         """When portfolio is not found by name, the error must occur before any parent job is created."""
