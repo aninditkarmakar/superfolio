@@ -9,7 +9,7 @@ from portfolio_engine.automation.adapters import get_adapter
 from portfolio_engine.automation.config import load_integration_config
 from portfolio_engine.automation.ingestion import dry_run_payload
 from portfolio_engine.automation.sanitization import sanitize_error_message
-from portfolio_engine.automation.summary import build_parent_summary
+from portfolio_engine.automation.summary import build_child_summary, build_parent_summary
 from portfolio_engine.automation.targets import AutomationValidationError, validate_target_inputs
 from portfolio_engine.automation.types import AutomationRunRequest, VALID_MODES, VALID_TARGET_TYPES
 from portfolio_engine.database import (
@@ -143,13 +143,29 @@ def run_automation(request: AutomationRunRequest, *, database, adapter=None) -> 
     if request.mode == "dry-run":
         for child_id, account in child_pairs:
             database.mark_automation_job_account_running(child_id)
-            payload = adapter.fetch_payload(account, request, config)
-            child_summary = dry_run_payload(
-                payload.xml_text,
-                account_external_id=account.account_external_id,
-                start_date=str(request.requested_start_date),
-                end_date=str(request.requested_end_date),
-            )
+            try:
+                payload = adapter.fetch_payload(account, request, config)
+                child_summary = dry_run_payload(
+                    payload.xml_text,
+                    account_external_id=account.account_external_id,
+                    start_date=str(request.requested_start_date),
+                    end_date=str(request.requested_end_date),
+                )
+            except Exception as exc:
+                error_message = sanitize_error_message(str(exc))
+                failed_child_summary = build_child_summary(error_category="fetch_or_parse_error")
+                database.finalize_automation_job_account(
+                    AutomationJobAccountFinalize(
+                        automation_job_account_id=child_id,
+                        status="failed",
+                        ingestion_run_id=None,
+                        summary=failed_child_summary,
+                        error_message=error_message,
+                    )
+                )
+                child_statuses.append("failed")
+                child_summaries.append(failed_child_summary)
+                continue
             database.finalize_automation_job_account(
                 AutomationJobAccountFinalize(
                     automation_job_account_id=child_id,

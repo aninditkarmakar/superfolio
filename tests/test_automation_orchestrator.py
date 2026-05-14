@@ -842,6 +842,190 @@ class AutomationOrchestratorDryRunTests(unittest.TestCase):
 
         self.assertIn("child-1", result.automation_job_account_ids)
 
+    # ------------------------------------------------------------------
+    # Issue 1: per-account exception handling in dry-run loop
+    # ------------------------------------------------------------------
+
+    def test_fetch_payload_exception_finalizes_child_as_failed(self):
+        """If fetch_payload raises, the child must be finalized as failed with ingestion_run_id=None."""
+        request = self._make_request()
+        db = self._make_db_with_accounts(self._make_account_target())
+
+        class ErrorFetchAdapter(FakeAdapter):
+            def fetch_payload(self, account, request, config):
+                raise RuntimeError("network unreachable")
+
+        result = self._run(request, db, adapter=ErrorFetchAdapter())
+
+        self.assertEqual(result.status, "failed")
+        self.assertEqual(len(db.finalized_children), 1, "child must be finalized even on fetch error")
+        child_fin = db.finalized_children[0]
+        self.assertEqual(child_fin.status, "failed")
+        self.assertIsNone(child_fin.ingestion_run_id)
+
+    def test_fetch_payload_exception_no_running_child_remains(self):
+        """After fetch_payload raises, no child row should remain in an unfinalized running state."""
+        request = self._make_request()
+        db = self._make_db_with_accounts(self._make_account_target())
+
+        class ErrorFetchAdapter(FakeAdapter):
+            def fetch_payload(self, account, request, config):
+                raise RuntimeError("network unreachable")
+
+        self._run(request, db, adapter=ErrorFetchAdapter())
+
+        running_ids = set(db.running_children)
+        finalized_ids = {f.automation_job_account_id for f in db.finalized_children}
+        self.assertTrue(
+            running_ids.issubset(finalized_ids),
+            f"Running children {running_ids} not all finalized; finalized: {finalized_ids}",
+        )
+
+    def test_fetch_payload_exception_parent_finalized_failed(self):
+        """If the only child fails via fetch_payload exception, parent must be finalized as failed."""
+        request = self._make_request()
+        db = self._make_db_with_accounts(self._make_account_target())
+
+        class ErrorFetchAdapter(FakeAdapter):
+            def fetch_payload(self, account, request, config):
+                raise RuntimeError("timeout")
+
+        self._run(request, db, adapter=ErrorFetchAdapter())
+
+        self.assertEqual(len(db.finalized_jobs), 1)
+        self.assertEqual(db.finalized_jobs[0].status, "failed")
+
+    def test_fetch_payload_exception_child_error_message_is_sanitized(self):
+        """Child error_message when fetch_payload raises must be sanitized (no raw secrets)."""
+        request = self._make_request()
+        db = self._make_db_with_accounts(self._make_account_target())
+
+        class ErrorFetchAdapter(FakeAdapter):
+            def fetch_payload(self, account, request, config):
+                raise RuntimeError("token=supersecret postgresql://user:pass@host/db")
+
+        self._run(request, db, adapter=ErrorFetchAdapter())
+
+        child_fin = db.finalized_children[0]
+        self.assertIsNotNone(child_fin.error_message)
+        self.assertNotIn("supersecret", child_fin.error_message or "")
+        self.assertNotIn("postgresql://", child_fin.error_message or "")
+
+    def test_fetch_payload_exception_child_summary_has_record_counts(self):
+        """Child summary on failure must still contain record_counts (privacy-safe empty shape)."""
+        request = self._make_request()
+        db = self._make_db_with_accounts(self._make_account_target())
+
+        class ErrorFetchAdapter(FakeAdapter):
+            def fetch_payload(self, account, request, config):
+                raise RuntimeError("timeout")
+
+        self._run(request, db, adapter=ErrorFetchAdapter())
+
+        child_fin = db.finalized_children[0]
+        self.assertIsInstance(child_fin.summary, dict)
+        self.assertIn("record_counts", child_fin.summary)
+
+    def test_two_accounts_first_fetch_raises_second_succeeds_parent_partially_succeeded(self):
+        """Two accounts: first fetch raises, second succeeds → parent status is partially_succeeded."""
+        request = self._make_request(account_external_ids=("U100", "U200"))
+        db = self._make_db_with_accounts(
+            self._make_account_target(account_id="acct-1", external_id="U100"),
+            self._make_account_target(account_id="acct-2", external_id="U200"),
+        )
+
+        call_count = [0]
+
+        class FirstFailAdapter(FakeAdapter):
+            def fetch_payload(self, account, req, config):
+                call_count[0] += 1
+                if call_count[0] == 1:
+                    raise RuntimeError("first account failed")
+                return super().fetch_payload(account, req, config)
+
+        result = self._run(request, db, adapter=FirstFailAdapter())
+
+        self.assertEqual(result.status, "partially_succeeded")
+        self.assertEqual(len(db.finalized_jobs), 1)
+        self.assertEqual(db.finalized_jobs[0].status, "partially_succeeded")
+
+    def test_two_accounts_first_fetch_raises_both_children_finalized(self):
+        """Two accounts: first fetch raises, second succeeds → both children are finalized."""
+        request = self._make_request(account_external_ids=("U100", "U200"))
+        db = self._make_db_with_accounts(
+            self._make_account_target(account_id="acct-1", external_id="U100"),
+            self._make_account_target(account_id="acct-2", external_id="U200"),
+        )
+
+        call_count = [0]
+
+        class FirstFailAdapter(FakeAdapter):
+            def fetch_payload(self, account, req, config):
+                call_count[0] += 1
+                if call_count[0] == 1:
+                    raise RuntimeError("first account failed")
+                return super().fetch_payload(account, req, config)
+
+        self._run(request, db, adapter=FirstFailAdapter())
+
+        self.assertEqual(len(db.finalized_children), 2, "both children must be finalized")
+        statuses = {f.automation_job_account_id: f.status for f in db.finalized_children}
+        self.assertEqual(statuses["child-1"], "failed")
+        self.assertEqual(statuses["child-2"], "succeeded")
+
+    def test_two_accounts_first_fetch_raises_second_still_executed(self):
+        """Two accounts: first fetch raises → loop must continue and execute the second account."""
+        request = self._make_request(account_external_ids=("U100", "U200"))
+        db = self._make_db_with_accounts(
+            self._make_account_target(account_id="acct-1", external_id="U100"),
+            self._make_account_target(account_id="acct-2", external_id="U200"),
+        )
+
+        call_count = [0]
+
+        class FirstFailAdapter(FakeAdapter):
+            def fetch_payload(self, account, req, config):
+                call_count[0] += 1
+                if call_count[0] == 1:
+                    raise RuntimeError("first account failed")
+                return super().fetch_payload(account, req, config)
+
+        self._run(request, db, adapter=FirstFailAdapter())
+
+        self.assertEqual(call_count[0], 2, "fetch_payload must be called for both accounts")
+
+
+class DeriveParentStatusTests(unittest.TestCase):
+    """Direct unit tests for the _derive_parent_status helper."""
+
+    def _derive(self, statuses):
+        from portfolio_engine.automation.orchestrator import _derive_parent_status
+        return _derive_parent_status(statuses)
+
+    def test_empty_list_returns_failed(self):
+        self.assertEqual(self._derive([]), "failed")
+
+    def test_single_failed_returns_failed(self):
+        self.assertEqual(self._derive(["failed"]), "failed")
+
+    def test_all_failed_returns_failed(self):
+        self.assertEqual(self._derive(["failed", "failed"]), "failed")
+
+    def test_mixed_succeeded_and_failed_returns_partially_succeeded(self):
+        self.assertEqual(self._derive(["succeeded", "failed"]), "partially_succeeded")
+
+    def test_mixed_succeeded_and_partially_succeeded_returns_partially_succeeded(self):
+        self.assertEqual(self._derive(["succeeded", "partially_succeeded"]), "partially_succeeded")
+
+    def test_single_partially_succeeded_returns_partially_succeeded(self):
+        self.assertEqual(self._derive(["partially_succeeded"]), "partially_succeeded")
+
+    def test_single_succeeded_returns_succeeded(self):
+        self.assertEqual(self._derive(["succeeded"]), "succeeded")
+
+    def test_all_succeeded_returns_succeeded(self):
+        self.assertEqual(self._derive(["succeeded", "succeeded"]), "succeeded")
+
 
 if __name__ == "__main__":
     unittest.main()
