@@ -2136,9 +2136,8 @@ class AutomationOrchestratorAccountIsolationTests(unittest.TestCase):
 
         child_fin = db.finalized_children[0]
         self.assertIsNotNone(child_fin.error_message)
-        # "token=secret" must have been redacted
+        # The secret value must have been redacted.
         self.assertNotIn("secret", child_fin.error_message or "")
-        self.assertNotIn("token=secret", child_fin.error_message or "")
 
     def test_sanitization_redacts_password_in_child_error(self):
         """password=<value> in fetch exception message is redacted in child error_message."""
