@@ -256,4 +256,98 @@ BEGIN
 END;
 $$;
 
+CREATE FUNCTION public.resolve_automation_portfolio_accounts(
+    p_portfolio_name TEXT,
+    p_brokerage_code TEXT
+)
+RETURNS TABLE (
+    account_id UUID,
+    brokerage_code TEXT,
+    account_external_id TEXT,
+    base_currency TEXT,
+    display_name TEXT
+)
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    IF p_portfolio_name IS NULL OR btrim(p_portfolio_name) = '' THEN
+        RAISE EXCEPTION 'target_type=portfolio requires portfolio_name';
+    END IF;
+
+    RETURN QUERY
+    SELECT a.id, b.code::TEXT, a.external_id::TEXT, a.base_currency::TEXT, a.display_name::TEXT
+    FROM public.portfolio_accounts pa
+    JOIN public.portfolios p ON p.id = pa.portfolio_id
+    JOIN public.accounts a ON a.id = pa.account_id
+    JOIN public.brokerages b ON b.id = a.brokerage_id
+    WHERE p.name = btrim(p_portfolio_name)
+      AND p.is_active = true
+      AND a.is_active = true
+      AND b.is_active = true
+      AND b.code = upper(btrim(p_brokerage_code))
+    ORDER BY b.code, a.external_id;
+END;
+$$;
+
+CREATE FUNCTION public.resolve_automation_account_targets(
+    p_brokerage_code TEXT,
+    p_account_external_ids TEXT[]
+)
+RETURNS TABLE (
+    account_id UUID,
+    brokerage_code TEXT,
+    account_external_id TEXT,
+    base_currency TEXT,
+    display_name TEXT
+)
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    IF p_account_external_ids IS NULL OR array_length(p_account_external_ids, 1) IS NULL THEN
+        RAISE EXCEPTION 'target_type=accounts requires account_external_ids';
+    END IF;
+
+    RETURN QUERY
+    SELECT a.id, b.code::TEXT, a.external_id::TEXT, a.base_currency::TEXT, a.display_name::TEXT
+    FROM public.accounts a
+    JOIN public.brokerages b ON b.id = a.brokerage_id
+    WHERE b.code = upper(btrim(p_brokerage_code))
+      AND b.is_active = true
+      AND a.is_active = true
+      AND a.external_id = ANY(p_account_external_ids)
+    ORDER BY b.code, a.external_id;
+END;
+$$;
+
+CREATE FUNCTION public.fail_stale_automation_runs(
+    p_stale_before TIMESTAMPTZ,
+    p_error_message TEXT
+)
+RETURNS INTEGER
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    v_child_count INTEGER;
+    v_parent_count INTEGER;
+BEGIN
+    UPDATE public.automation_job_accounts
+    SET status = 'failed',
+        error_message = NULLIF(btrim(p_error_message), ''),
+        completed_at = now()
+    WHERE status = 'running'
+      AND started_at < p_stale_before;
+    GET DIAGNOSTICS v_child_count = ROW_COUNT;
+
+    UPDATE public.automation_jobs
+    SET status = 'failed',
+        error_message = NULLIF(btrim(p_error_message), ''),
+        completed_at = now()
+    WHERE status = 'running'
+      AND started_at < p_stale_before;
+    GET DIAGNOSTICS v_parent_count = ROW_COUNT;
+
+    RETURN v_child_count + v_parent_count;
+END;
+$$;
+
 COMMIT;

@@ -228,6 +228,31 @@ class MigrationContractTests(unittest.TestCase):
         self.assertIn("to_regprocedure('public.create_automation_job", sql)
         self.assertNotIn("'public.create_automation_job(text,text,uuid,text,text,date,date)'::regprocedure", sql)
 
+    def test_automation_layer_defines_target_and_cleanup_functions(self) -> None:
+        sql = (MIGRATIONS_DIR / "deploy" / "create_automation_layer.sql").read_text(encoding="utf-8")
+
+        self.assertIn("CREATE FUNCTION public.resolve_automation_portfolio_accounts", sql)
+        self.assertIn("CREATE FUNCTION public.resolve_automation_account_targets", sql)
+        self.assertIn("CREATE FUNCTION public.fail_stale_automation_runs", sql)
+        self.assertIn("a.is_active = true", sql)
+        self.assertIn("b.is_active = true", sql)
+        self.assertIn("p.is_active = true", sql)
+
+    def test_automation_layer_revert_drops_target_and_cleanup_functions(self) -> None:
+        sql = (MIGRATIONS_DIR / "revert" / "create_automation_layer.sql").read_text(encoding="utf-8")
+
+        self.assertIn("DROP FUNCTION IF EXISTS public.fail_stale_automation_runs(TIMESTAMPTZ, TEXT)", sql)
+        self.assertIn("DROP FUNCTION IF EXISTS public.resolve_automation_account_targets(TEXT, TEXT[])", sql)
+        self.assertIn("DROP FUNCTION IF EXISTS public.resolve_automation_portfolio_accounts(TEXT, TEXT)", sql)
+
+    def test_automation_layer_verify_target_and_cleanup_functions(self) -> None:
+        sql = (MIGRATIONS_DIR / "verify" / "create_automation_layer.sql").read_text(encoding="utf-8")
+
+        self.assertIn("to_regprocedure('public.resolve_automation_portfolio_accounts(text,text)')", sql)
+        self.assertIn("to_regprocedure('public.resolve_automation_account_targets(text,text[])')", sql)
+        self.assertIn("to_regprocedure('public.fail_stale_automation_runs(timestamptz,text)')", sql)
+        self.assertIn("SELECT 1 / (count(*) = 3)::int", sql)
+
 
 if __name__ == "__main__":
     unittest.main()

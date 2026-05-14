@@ -30,3 +30,12 @@ FROM (
         (to_regprocedure('public.finalize_automation_job_account(uuid,text,uuid,jsonb,text)'))
 ) AS functions(signature)
 WHERE signature IS NOT NULL;
+
+SELECT 1 / (count(*) = 3)::int
+FROM (
+    VALUES
+        (to_regprocedure('public.resolve_automation_portfolio_accounts(text,text)')),
+        (to_regprocedure('public.resolve_automation_account_targets(text,text[])')),
+        (to_regprocedure('public.fail_stale_automation_runs(timestamptz,text)'))
+) AS functions(signature)
+WHERE signature IS NOT NULL;
