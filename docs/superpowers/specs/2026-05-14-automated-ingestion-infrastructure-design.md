@@ -37,6 +37,7 @@ The current database `ingestion_runs` table is intentionally account-scoped. Tha
 - **Consistent run policy:** target resolution, mode handling, account iteration, and failure aggregation are centralized in the orchestrator.
 - **No silent behavior:** invalid target type, unknown integration, invalid mode, missing config, or empty resolved account set fails explicitly.
 - **Privacy-safe outputs:** summaries expose statuses and counts, not portfolio/account values.
+- **Safe manual fetches:** manual automated runs require an explicit requested start and end date to avoid accidental unbounded broker pulls.
 
 ## Database model
 
@@ -75,7 +76,8 @@ Important constraints:
 - `target_type` must be `portfolio` or `accounts`.
 - `portfolio_id` must be present only for portfolio jobs.
 - `mode` must be `dry-run` or `load`.
-- requested date range must be ordered when both dates are present.
+- `requested_start_date` and `requested_end_date` are required for manual automated ingestion.
+- requested date range must be ordered.
 - completed jobs must have `completed_at >= started_at`.
 
 ### `automation_job_accounts`
@@ -92,7 +94,7 @@ Key fields:
 - `ingestion_run_id uuid null references ingestion_runs(id)`
   - set when the orchestrator starts the existing per-account ingestion path.
 - `summary jsonb null`
-  - privacy-safe counts and diagnostics for this account.
+  - privacy-safe counts, status labels, and sanitized diagnostics for this account.
 - `error_message text null`
 - `started_at timestamptz null`
 - `completed_at timestamptz null`
@@ -108,6 +110,8 @@ Important constraints:
 
 Existing `ingestion_runs` remains account-scoped and continues to back normalized ingestion. Each `automation_job_accounts` row may link to one `ingestion_runs` row when actual account ingestion is attempted.
 
+Dry-run jobs do not create account-scoped `ingestion_runs`; their child `ingestion_run_id` values remain null. Load jobs set `ingestion_run_id` when the orchestrator starts the existing per-account ingestion path.
+
 This gives two layers:
 
 - `automation_jobs`: "What did the user/workflow ask to run?"
@@ -119,20 +123,32 @@ Manual trigger supports exactly one target type per run.
 
 ### Portfolio target
 
-The trigger identifies one portfolio. The orchestrator resolves all active accounts attached to that portfolio at trigger time and inserts those accounts into `automation_job_accounts`.
+The trigger identifies one active portfolio. Inactive portfolios are rejected as invalid automation targets.
+
+The orchestrator resolves all active accounts attached to that portfolio on active brokerages/integrations at trigger time and inserts those accounts into `automation_job_accounts`. This active-only rule is specific to ingestion. Portfolio reporting and historical TWR calculations may still include inactive accounts that remain portfolio members.
 
 Historical jobs do not change if the portfolio membership changes later.
 
 ### Accounts target
 
-The initial GitHub Actions trigger accepts a comma-separated `account_external_ids` input scoped to the selected integration. The orchestrator resolves those external ids into registered internal account rows before job execution. The database stores resolved `account_id` child rows, not the raw user input text.
+The initial GitHub Actions trigger accepts a comma-separated `account_external_ids` input scoped to the selected integration. The orchestrator trims whitespace, rejects empty tokens, deduplicates repeated ids, and resolves those external ids into active registered account rows for the integration's brokerage before job execution.
+
+Unknown, inactive, or wrong-brokerage accounts fail preflight before account processing starts. The database stores resolved `account_id` child rows, not the raw user input text.
 
 ### Dry-run and load
 
 Both modes create `automation_jobs` and `automation_job_accounts` rows.
 
-- `dry-run`: fetches and parses broker payloads, records account summaries/errors, and does not write normalized facts.
+- `dry-run`: fetches and parses broker payloads, records account summaries/errors, and does not write normalized facts or account-scoped `ingestion_runs`.
 - `load`: fetches, parses, and writes supported normalized records through existing ingestion boundaries.
+
+If fetch and parse complete successfully but no supported records are found for an account in the requested date range, that child account row is `succeeded` with zero counts.
+
+### Preflight audit behavior
+
+Valid-looking manual trigger attempts should create an `automation_jobs` row when the database is reachable, even if later preflight validation fails before account processing. Examples include unknown portfolio, inactive portfolio, invalid account ids, empty resolved account set, missing integration config, or missing required broker credentials.
+
+Those jobs are finalized as `failed` with a sanitized error category/message. If the database is unavailable before a parent job can be created, the workflow fails without a persisted job.
 
 ## Orchestrator architecture
 
@@ -153,8 +169,16 @@ Responsibilities:
 Parent final status:
 
 - `succeeded`: all account rows succeeded.
-- `partially_succeeded`: at least one account succeeded and at least one account failed or partially succeeded.
-- `failed`: no account succeeded.
+- `partially_succeeded`: at least one account row partially succeeded, or at least one account row succeeded while another failed.
+- `failed`: all account rows failed, or no account rows were created because preflight failed before target resolution completed.
+
+Child account status semantics:
+
+- `succeeded`: fetch/parse completed and, for load mode, ingestion completed without skipped-account or conflict conditions. Zero supported records is still success when fetch/parse completed cleanly.
+- `partially_succeeded`: fetch/parse/load completed, but ingestion reported skipped records, inactive/unknown source records, or canonical-data conflicts that require review.
+- `failed`: fetch, parse, or account-level ingestion failed.
+
+Zero resolved child accounts is a preflight failure, not a successful empty job.
 
 ## Broker adapter boundary
 
@@ -172,6 +196,8 @@ Adapter responsibilities:
 - surface broker-specific fetch/config errors clearly.
 
 Future broker integrations should add a new adapter and registry/config entry without rewriting orchestrator control flow.
+
+Broker payloads may contain records for accounts other than the requested account. The orchestrator and ingestion handoff remain account-scoped: records for other accounts must be ignored/skipped with sanitized counts, not written under the requested account.
 
 ## GitHub Actions workflow
 
@@ -193,12 +219,21 @@ The workflow remains schedule-ready: a future cron trigger should call the same 
 
 Store non-secret integration defaults in `portfolio_engine/automation/integrations.yaml`.
 
-Example content:
+Required content for each integration:
 
-- enabled integration keys.
-- adapter import path or registry key.
-- supported modes.
-- source type mapping such as `ibkr_flex_ws -> FLEX_WEB_SERVICE`.
+- `integration_key`
+- `brokerage_code`
+- `source_type`
+- `adapter_path` or registry key
+- `supported_modes`
+- `required_env_keys`
+
+Initial mapping:
+
+- `integration_key`: `ibkr_flex_ws`
+- `brokerage_code`: `IBKR`
+- `source_type`: `FLEX_WEB_SERVICE`
+- `supported_modes`: `dry-run`, `load`
 
 ### Secret and environment config
 
@@ -208,6 +243,20 @@ Required keys include:
 
 - `DATABASE_URL`
 - IBKR-specific Flex Web Service credentials required by the adapter.
+
+## Database mutation boundary
+
+Automation lifecycle writes follow the existing database boundary pattern: Python code calls `SuperFolioDatabase` methods, which call PostgreSQL functions. The orchestrator should not write directly to automation tables.
+
+Required function/adapter responsibilities:
+
+- create an automation job.
+- finalize an automation job.
+- insert resolved automation job account rows.
+- mark an automation job account running.
+- finalize an automation job account with status, optional linked `ingestion_run_id`, sanitized summary, and sanitized error message.
+- resolve active portfolio target accounts for ingestion.
+- resolve active account target selections for an integration.
 
 ## Error handling
 
@@ -221,6 +270,8 @@ Fail before account processing for:
 - missing required config or secrets.
 - invalid date range.
 
+When the database is reachable and a valid-looking manual trigger has already created an `automation_jobs` row, preflight failures finalize that parent row as `failed`.
+
 Continue account processing for per-account errors:
 
 - fetch failure.
@@ -228,6 +279,32 @@ Continue account processing for per-account errors:
 - account-specific ingestion failure.
 
 The orchestrator records the account failure, continues remaining accounts, and then derives the parent final status from child outcomes.
+
+## Privacy and diagnostics
+
+Database `summary` and `error_message` fields must contain sanitized metadata only:
+
+- counts.
+- status labels.
+- error categories.
+- short sanitized messages.
+
+They must not contain:
+
+- raw Flex XML or raw broker payloads.
+- credentials, tokens, query ids that function as secrets, or database URLs.
+- account values, NAV values, cash amounts, or other absolute financial values.
+- full broker response bodies.
+
+During manual testing, detailed diagnostics may be kept outside the database in local logs or workflow artifacts when needed, but those artifacts must still avoid credentials and connection strings.
+
+## Concurrency and recovery
+
+Overlapping concurrent `load` jobs for the same integration, account, and requested date range should be blocked. Dry-run jobs may overlap with other dry-runs or load jobs because they do not write normalized facts or account-scoped `ingestion_runs`.
+
+The implementation should use a database-backed locking strategy, such as PostgreSQL advisory locks, so concurrent workflow runs cannot both load the same account/date window. Locking failures should mark the affected child account row as `failed` or fail preflight when no account processing has started.
+
+If the orchestrator crashes or the workflow is cancelled after marking a parent or child row `running`, a later run or maintenance routine must be able to mark stale `running` rows as `failed` with a sanitized timeout/cancellation reason.
 
 ## Testing strategy
 
@@ -237,14 +314,25 @@ The orchestrator records the account failure, continues remaining accounts, and 
 - verify portfolio target requires `portfolio_id`.
 - verify account target rejects `portfolio_id`.
 - verify duplicate account child rows are rejected.
+- verify manual jobs require both requested start and end dates.
+- verify dry-run child rows do not link to `ingestion_runs`.
+- verify automation lifecycle writes are available through PostgreSQL functions.
 
 ### Orchestrator unit tests
 
 - target resolution for portfolio and account targets.
+- inactive portfolio rejection.
+- active-only ingestion resolution for portfolio targets.
+- account target trimming, deduplication, and unknown/inactive account rejection.
 - snapshot behavior for resolved accounts.
 - dry-run versus load routing.
 - child status aggregation into parent status.
 - continue-on-error account loop.
+- preflight failure persistence as failed parent job when DB is reachable.
+- empty supported-record result as success with zero counts.
+- sanitized summary/error storage.
+- overlapping load job blocking.
+- stale-running cleanup/finalization behavior.
 
 ### Adapter tests
 
