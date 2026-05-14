@@ -267,6 +267,13 @@ class MigrationContractTests(unittest.TestCase):
         self.assertIn("FROM public.automation_jobs", sql)
         self.assertIn("started_at < p_stale_before", sql)
 
+    def test_automation_layer_account_target_resolution_trims_external_ids(self) -> None:
+        sql = (MIGRATIONS_DIR / "deploy" / "create_automation_layer.sql").read_text(encoding="utf-8")
+
+        self.assertIn("FROM unnest(p_account_external_ids) AS requested(account_external_id)", sql)
+        self.assertIn("SELECT btrim(requested.account_external_id)", sql)
+        self.assertIn("btrim(requested.account_external_id) <> ''", sql)
+
 
 if __name__ == "__main__":
     unittest.main()

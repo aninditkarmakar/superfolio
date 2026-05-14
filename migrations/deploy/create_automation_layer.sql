@@ -322,7 +322,11 @@ BEGIN
     WHERE b.code = upper(btrim(p_brokerage_code))
       AND b.is_active = true
       AND a.is_active = true
-      AND a.external_id = ANY(p_account_external_ids)
+      AND a.external_id IN (
+          SELECT btrim(requested.account_external_id)
+          FROM unnest(p_account_external_ids) AS requested(account_external_id)
+          WHERE btrim(requested.account_external_id) <> ''
+      )
     ORDER BY b.code, a.external_id;
 END;
 $$;
