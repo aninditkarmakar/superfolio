@@ -1,0 +1,13 @@
+integrations:
+  ibkr_flex_ws:
+    brokerage_code: IBKR
+    source_type: FLEX_WEB_SERVICE
+    adapter_key: ibkr_flex_ws
+    supported_modes:
+      - dry-run
+      - load
+    required_env_keys:
+      - DATABASE_URL
+      - IBKR_FLEX_TOKEN
+      - IBKR_FLEX_QUERY_ID
+    stale_running_timeout_minutes: 120
