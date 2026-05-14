@@ -4,3 +4,4 @@
 create_books 2026-05-11T15:13:52Z node <node@8c0fc730d16a> # Create example books table
 create_mvp_schema 2026-05-11T20:49:40Z node <node@14351873f72f> # Create MVP portfolio schema
 create_portfolio_layer 2026-05-13T19:32:36Z node <node@portfolio-layer> # Create portfolio aggregation schema
+create_automation_layer 2026-05-14T00:00:00Z node <node@automation-layer> # Create automation ingestion job schema

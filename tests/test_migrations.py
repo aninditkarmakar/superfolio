@@ -132,5 +132,22 @@ class MigrationContractTests(unittest.TestCase):
         self.assertLess(null_check_pos, mismatch_pos)
 
 
+    def test_automation_layer_is_registered_after_portfolio_layer(self) -> None:
+        plan = Path("migrations/sqitch.plan").read_text(encoding="utf-8")
+
+        portfolio_pos = plan.index("create_portfolio_layer")
+        automation_pos = plan.index("create_automation_layer")
+
+        self.assertLess(portfolio_pos, automation_pos)
+
+    def test_automation_layer_migration_files_exist(self) -> None:
+        for path in (
+            Path("migrations/deploy/create_automation_layer.sql"),
+            Path("migrations/revert/create_automation_layer.sql"),
+            Path("migrations/verify/create_automation_layer.sql"),
+        ):
+            self.assertTrue(path.exists(), f"missing {path}")
+
+
 if __name__ == "__main__":
     unittest.main()
