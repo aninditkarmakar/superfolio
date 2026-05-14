@@ -382,4 +382,27 @@ BEGIN
 END;
 $$;
 
+CREATE FUNCTION public.has_overlapping_automation_load(
+    p_integration_key TEXT,
+    p_account_id UUID,
+    p_requested_start_date DATE,
+    p_requested_end_date DATE
+)
+RETURNS BOOLEAN
+LANGUAGE sql
+AS $$
+    SELECT EXISTS (
+        SELECT 1
+        FROM public.automation_jobs j
+        JOIN public.automation_job_accounts ja ON ja.automation_job_id = j.id
+        WHERE j.integration_key = lower(btrim(p_integration_key))
+          AND j.mode = 'load'
+          AND j.status IN ('pending', 'running')
+          AND ja.account_id = p_account_id
+          AND ja.status IN ('pending', 'running')
+          AND daterange(j.requested_start_date, j.requested_end_date, '[]')
+              && daterange(p_requested_start_date, p_requested_end_date, '[]')
+    );
+$$;
+
 COMMIT;

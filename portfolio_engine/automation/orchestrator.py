@@ -181,6 +181,13 @@ def run_automation(request: AutomationRunRequest, *, database, adapter=None) -> 
         for child_id, account in child_pairs:
             database.mark_automation_job_account_running(child_id)
             try:
+                if request.mode == "load" and database.has_overlapping_automation_load(
+                    integration_key=request.integration_key,
+                    account_id=account.account_id,
+                    requested_start_date=request.requested_start_date,
+                    requested_end_date=request.requested_end_date,
+                ):
+                    raise RuntimeError("overlapping_load_job")
                 payload = adapter.fetch_payload(account, request, config)
                 ingestion_run_id, child_status, child_summary, child_message = load_payload(
                     payload.xml_text,

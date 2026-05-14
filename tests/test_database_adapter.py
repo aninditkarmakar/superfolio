@@ -1023,6 +1023,56 @@ class AutomationDatabaseAdapterTests(unittest.TestCase):
 
         self.assertIs(hints["stale_before"], datetime)
 
+    # ------------------------------------------------------------------
+    # Task 15: Overlap detection adapter method
+    # ------------------------------------------------------------------
+
+    def test_has_overlapping_automation_load_calls_database_function(self) -> None:
+        connection = FakeConnection((True,))
+        database = SuperFolioDatabase(connection)
+
+        result = database.has_overlapping_automation_load(
+            integration_key="ibkr_flex_ws",
+            account_id="account-uuid",
+            requested_start_date=date(2024, 1, 1),
+            requested_end_date=date(2024, 1, 31),
+        )
+
+        self.assertTrue(result)
+        self.assertEqual(connection.commit_count, 1)
+        sql, params = connection.cursor_instance.executed[0]
+        self.assertEqual(sql, "SELECT public.has_overlapping_automation_load(%s, %s, %s, %s)")
+        self.assertEqual(
+            params,
+            ("ibkr_flex_ws", "account-uuid", date(2024, 1, 1), date(2024, 1, 31)),
+        )
+
+    def test_has_overlapping_automation_load_returns_false_when_no_overlap(self) -> None:
+        connection = FakeConnection((False,))
+        database = SuperFolioDatabase(connection)
+
+        result = database.has_overlapping_automation_load(
+            integration_key="ibkr_flex_ws",
+            account_id="account-uuid",
+            requested_start_date=date(2024, 2, 1),
+            requested_end_date=date(2024, 2, 28),
+        )
+
+        self.assertFalse(result)
+
+    def test_has_overlapping_automation_load_returns_bool(self) -> None:
+        connection = FakeConnection((True,))
+        database = SuperFolioDatabase(connection)
+
+        result = database.has_overlapping_automation_load(
+            integration_key="ibkr_flex_ws",
+            account_id="account-uuid",
+            requested_start_date=date(2024, 1, 1),
+            requested_end_date=date(2024, 1, 31),
+        )
+
+        self.assertIsInstance(result, bool)
+
 
 if __name__ == "__main__":
     unittest.main()

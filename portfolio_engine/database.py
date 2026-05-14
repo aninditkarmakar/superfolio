@@ -239,6 +239,20 @@ class SuperFolioDatabase:
         )
         return int(row[0])
 
+    def has_overlapping_automation_load(
+        self,
+        *,
+        integration_key: str,
+        account_id: str,
+        requested_start_date: date,
+        requested_end_date: date,
+    ) -> bool:
+        row = self._fetch_one(
+            "SELECT public.has_overlapping_automation_load(%s, %s, %s, %s)",
+            (integration_key, account_id, requested_start_date, requested_end_date),
+        )
+        return bool(row[0])
+
     def bulk_ingest_cash_flows(
         self, ingestion_run_id: str, records: list[dict[str, Any]]
     ) -> BulkIngestionSummary:

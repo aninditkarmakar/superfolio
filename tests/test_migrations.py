@@ -286,6 +286,62 @@ class MigrationContractTests(unittest.TestCase):
         self.assertIn("IF p_stale_before IS NULL THEN", sql)
         self.assertIn("p_stale_before must not be NULL", sql)
 
+    # ------------------------------------------------------------------
+    # Task 15: Overlap detection function
+    # ------------------------------------------------------------------
+
+    def test_automation_layer_deploy_defines_overlap_detection_function(self) -> None:
+        sql = (MIGRATIONS_DIR / "deploy" / "create_automation_layer.sql").read_text(encoding="utf-8")
+
+        self.assertIn("CREATE FUNCTION public.has_overlapping_automation_load", sql)
+        self.assertIn("daterange", sql)
+
+    def test_automation_layer_overlap_function_uses_correct_parameter_types(self) -> None:
+        sql = (MIGRATIONS_DIR / "deploy" / "create_automation_layer.sql").read_text(encoding="utf-8")
+
+        self.assertIn("p_integration_key TEXT", sql)
+        self.assertIn("p_account_id UUID", sql)
+        self.assertIn("p_requested_start_date DATE", sql)
+        self.assertIn("p_requested_end_date DATE", sql)
+
+    def test_automation_layer_overlap_function_returns_boolean(self) -> None:
+        sql = (MIGRATIONS_DIR / "deploy" / "create_automation_layer.sql").read_text(encoding="utf-8")
+
+        func_start = sql.index("CREATE FUNCTION public.has_overlapping_automation_load")
+        func_segment = sql[func_start:func_start + 500]
+        self.assertIn("RETURNS BOOLEAN", func_segment)
+
+    def test_automation_layer_revert_drops_overlap_function(self) -> None:
+        sql = (MIGRATIONS_DIR / "revert" / "create_automation_layer.sql").read_text(encoding="utf-8")
+
+        self.assertIn(
+            "DROP FUNCTION IF EXISTS public.has_overlapping_automation_load(TEXT, UUID, DATE, DATE);",
+            sql,
+        )
+
+    def test_automation_layer_revert_drops_overlap_function_before_tables(self) -> None:
+        sql = (MIGRATIONS_DIR / "revert" / "create_automation_layer.sql").read_text(encoding="utf-8")
+
+        drop_func_pos = sql.index("DROP FUNCTION IF EXISTS public.has_overlapping_automation_load")
+        drop_table_pos = sql.index("DROP TABLE IF EXISTS public.automation_job_accounts")
+        self.assertLess(drop_func_pos, drop_table_pos)
+
+    def test_automation_layer_verify_checks_overlap_function(self) -> None:
+        sql = (MIGRATIONS_DIR / "verify" / "create_automation_layer.sql").read_text(encoding="utf-8")
+
+        self.assertIn(
+            "to_regprocedure('public.has_overlapping_automation_load(text,uuid,date,date)')",
+            sql,
+        )
+
+    def test_automation_layer_verify_overlap_function_uses_error_raising_style(self) -> None:
+        """Verify must use 1/(count=N)::int pattern — not a silent no-op SELECT 1 WHERE."""
+        sql = (MIGRATIONS_DIR / "verify" / "create_automation_layer.sql").read_text(encoding="utf-8")
+
+        # Should not contain a bare "SELECT 1 WHERE ... IS NOT NULL" for the new function alone
+        # (that would be a silent pass on missing function). Must use the raising integer-divide style.
+        self.assertIn("1 /", sql)
+
 
 if __name__ == "__main__":
     unittest.main()

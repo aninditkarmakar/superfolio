@@ -200,6 +200,9 @@ class FakeAutomationDatabase:
         self.completed_ingestion_runs: list = []
         self.cash_bulk_calls: list = []
         self.nav_bulk_calls: list = []
+        # Overlap detection (Task 15)
+        self.overlapping_load: bool = False
+        self.overlap_check_calls: list = []
 
     def fail_stale_automation_runs(self, *, stale_before, error_message) -> int:
         self._event_log.append("fail_stale")
@@ -272,6 +275,22 @@ class FakeAutomationDatabase:
             skipped_accounts=[],
             record_results=[],
         )
+
+    def has_overlapping_automation_load(
+        self,
+        *,
+        integration_key: str,
+        account_id: str,
+        requested_start_date,
+        requested_end_date,
+    ) -> bool:
+        self.overlap_check_calls.append({
+            "integration_key": integration_key,
+            "account_id": account_id,
+            "requested_start_date": requested_start_date,
+            "requested_end_date": requested_end_date,
+        })
+        return self.overlapping_load
 
 
 class FakeAdapter:
@@ -2199,6 +2218,198 @@ class AutomationOrchestratorAccountIsolationTests(unittest.TestCase):
         finalized_by_id = {f.automation_job_account_id: f for f in db.finalized_children}
         succeeded_child = finalized_by_id["child-1"]
         self.assertNotIn("error_category", succeeded_child.summary)
+
+
+# ---------------------------------------------------------------------------
+# Task 15: Overlap detection and load blocking
+# ---------------------------------------------------------------------------
+
+
+class AutomationOrchestratorOverlapTests(unittest.TestCase):
+    """Task 15: Overlapping load detection, blocking, and isolation."""
+
+    def _run(self, request, db, adapter=None):
+        from portfolio_engine.automation.orchestrator import run_automation
+        if adapter is None:
+            adapter = FakeAdapter()
+        return run_automation(request, database=db, adapter=adapter)
+
+    def _make_load_request(self, **kwargs):
+        from portfolio_engine.automation.types import AutomationRunRequest
+        defaults = dict(
+            target_type="accounts",
+            integration_key="ibkr_flex_ws",
+            mode="load",
+            requested_start_date=date(2024, 1, 1),
+            requested_end_date=date(2024, 1, 31),
+            account_external_ids=("U100",),
+        )
+        defaults.update(kwargs)
+        return AutomationRunRequest(**defaults)
+
+    def _make_dry_run_request(self, **kwargs):
+        from portfolio_engine.automation.types import AutomationRunRequest
+        defaults = dict(
+            target_type="accounts",
+            integration_key="ibkr_flex_ws",
+            mode="dry-run",
+            requested_start_date=date(2024, 1, 1),
+            requested_end_date=date(2024, 1, 31),
+            account_external_ids=("U100",),
+        )
+        defaults.update(kwargs)
+        return AutomationRunRequest(**defaults)
+
+    def _make_account_target(self, *, account_id="account-uuid", external_id="U100"):
+        from portfolio_engine.database import AutomationAccountTarget
+        return AutomationAccountTarget(
+            account_id=account_id,
+            brokerage_code="IBKR",
+            account_external_id=external_id,
+            base_currency="USD",
+            display_name="Main",
+        )
+
+    def _make_db_with_accounts(self, *accounts):
+        db = FakeAutomationDatabase()
+        db.account_targets = list(accounts)
+        return db
+
+    def test_overlapping_load_marks_child_failed(self):
+        """Load request with overlapping_load=True: result.status failed, child finalized failed."""
+        request = self._make_load_request()
+        db = self._make_db_with_accounts(self._make_account_target())
+        db.overlapping_load = True
+
+        result = self._run(request, db)
+
+        self.assertEqual(result.status, "failed")
+        self.assertEqual(len(db.finalized_children), 1)
+        self.assertEqual(db.finalized_children[0].status, "failed")
+
+    def test_overlapping_load_error_message_contains_category(self):
+        """Overlap failure error_message on child must contain 'overlapping_load_job'."""
+        request = self._make_load_request()
+        db = self._make_db_with_accounts(self._make_account_target())
+        db.overlapping_load = True
+
+        self._run(request, db)
+
+        child_fin = db.finalized_children[0]
+        self.assertIsNotNone(child_fin.error_message)
+        self.assertIn("overlapping_load_job", child_fin.error_message)
+
+    def test_overlapping_load_does_not_call_fetch_payload(self):
+        """When overlap is detected, fetch_payload must not be called for that account."""
+        request = self._make_load_request()
+        db = self._make_db_with_accounts(self._make_account_target())
+        db.overlapping_load = True
+
+        fetch_calls = []
+
+        class TrackingAdapter(FakeAdapter):
+            def fetch_payload(self, account, req, config):
+                fetch_calls.append(account)
+                return super().fetch_payload(account, req, config)
+
+        self._run(request, db, adapter=TrackingAdapter())
+
+        self.assertEqual(len(fetch_calls), 0, "fetch_payload must not be called when overlap is detected")
+
+    def test_dry_run_does_not_call_has_overlapping_automation_load(self):
+        """Dry-run mode must never call has_overlapping_automation_load."""
+        request = self._make_dry_run_request()
+        db = self._make_db_with_accounts(self._make_account_target())
+
+        self._run(request, db)
+
+        self.assertEqual(len(db.overlap_check_calls), 0, "dry-run must not check for overlap")
+
+    def test_load_calls_overlap_check_with_resolved_account_id(self):
+        """Overlap check must receive the resolved account_id (UUID), not the external id."""
+        request = self._make_load_request()
+        db = self._make_db_with_accounts(
+            self._make_account_target(account_id="resolved-uuid", external_id="U100")
+        )
+
+        self._run(request, db)
+
+        self.assertEqual(len(db.overlap_check_calls), 1)
+        self.assertEqual(db.overlap_check_calls[0]["account_id"], "resolved-uuid")
+
+    def test_load_calls_overlap_check_before_fetch_payload_when_no_overlap(self):
+        """When overlap=False, overlap check runs before fetch; fetch is called exactly once."""
+        request = self._make_load_request()
+        db = self._make_db_with_accounts(self._make_account_target())
+
+        event_log = []
+
+        class TrackingAdapter(FakeAdapter):
+            def fetch_payload(self, account, req, config):
+                event_log.append("fetch")
+                return super().fetch_payload(account, req, config)
+
+        original_overlap = db.has_overlapping_automation_load
+
+        def tracking_overlap(**kwargs):
+            event_log.append("overlap_check")
+            return original_overlap(**kwargs)
+
+        db.has_overlapping_automation_load = tracking_overlap
+
+        self._run(request, db, adapter=TrackingAdapter())
+
+        self.assertIn("overlap_check", event_log)
+        self.assertIn("fetch", event_log)
+        self.assertLess(event_log.index("overlap_check"), event_log.index("fetch"))
+
+    def test_mixed_overlap_one_blocked_one_succeeds_partially_succeeded(self):
+        """Two accounts: first overlaps (blocked), second succeeds → partially_succeeded."""
+        request = self._make_load_request(account_external_ids=("U100", "U200"))
+        db = self._make_db_with_accounts(
+            self._make_account_target(account_id="acct-1", external_id="U100"),
+            self._make_account_target(account_id="acct-2", external_id="U200"),
+        )
+
+        call_count = [0]
+        original_overlap = db.has_overlapping_automation_load
+
+        def first_overlaps(**kwargs):
+            call_count[0] += 1
+            return call_count[0] == 1
+
+        db.has_overlapping_automation_load = first_overlaps
+
+        result = self._run(request, db)
+
+        self.assertEqual(result.status, "partially_succeeded")
+        self.assertEqual(len(db.finalized_children), 2)
+        finalized_by_id = {f.automation_job_account_id: f for f in db.finalized_children}
+        self.assertEqual(finalized_by_id["child-1"].status, "failed")
+        self.assertEqual(finalized_by_id["child-2"].status, "succeeded")
+
+    def test_overlapping_load_parent_finalized_failed_when_only_account(self):
+        """Single account with overlap → parent finalized as failed."""
+        request = self._make_load_request()
+        db = self._make_db_with_accounts(self._make_account_target())
+        db.overlapping_load = True
+
+        self._run(request, db)
+
+        self.assertEqual(len(db.finalized_jobs), 1)
+        self.assertEqual(db.finalized_jobs[0].status, "failed")
+
+    def test_overlapping_load_child_summary_is_privacy_safe(self):
+        """Overlap failure child summary must have record_counts (privacy-safe shape)."""
+        request = self._make_load_request()
+        db = self._make_db_with_accounts(self._make_account_target())
+        db.overlapping_load = True
+
+        self._run(request, db)
+
+        child_fin = db.finalized_children[0]
+        self.assertIsNotNone(child_fin.summary)
+        self.assertIn("record_counts", child_fin.summary)
 
 
 if __name__ == "__main__":
