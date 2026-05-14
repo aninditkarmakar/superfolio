@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, datetime
 from decimal import Decimal
 from typing import Any, Protocol
 
@@ -232,7 +232,7 @@ class SuperFolioDatabase:
         )
         return [_automation_account_target_from_row(row) for row in rows]
 
-    def fail_stale_automation_runs(self, *, stale_before: date, error_message: str) -> int:
+    def fail_stale_automation_runs(self, *, stale_before: datetime, error_message: str) -> int:
         row = self._fetch_one(
             "SELECT public.fail_stale_automation_runs(%s, %s)",
             (stale_before, error_message),
@@ -546,6 +546,9 @@ class SuperFolioDatabase:
 
 
 def _jsonb(value: Any) -> Any:
+    if value is None:
+        return None
+
     try:
         from psycopg.types.json import Jsonb
     except ImportError:

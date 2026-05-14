@@ -3,9 +3,11 @@ from __future__ import annotations
 import os
 import unittest
 from dataclasses import FrozenInstanceError
-from datetime import date
+from datetime import date, datetime, timezone
 from decimal import Decimal
-from typing import Any
+from typing import Any, get_type_hints
+
+from psycopg.types.json import Jsonb
 
 from portfolio_engine.database import (
     AccountRegistration,
@@ -874,6 +876,8 @@ class AutomationDatabaseAdapterTests(unittest.TestCase):
         self.assertEqual(sql, "SELECT public.finalize_automation_job(%s, %s, %s, %s)")
         self.assertEqual(params[0], "job-uuid")
         self.assertEqual(params[1], "succeeded")
+        self.assertIsInstance(params[2], Jsonb)
+        self.assertEqual(params[2].obj, {"account_counts": {"total": 1, "succeeded": 1, "partially_succeeded": 0, "failed": 0}})
         self.assertEqual(params[3], None)
 
     def test_resolve_automation_account_targets_maps_rows(self) -> None:
@@ -954,6 +958,8 @@ class AutomationDatabaseAdapterTests(unittest.TestCase):
         self.assertEqual(params[0], "job-account-uuid")
         self.assertEqual(params[1], "succeeded")
         self.assertEqual(params[2], "run-uuid")
+        self.assertIsInstance(params[3], Jsonb)
+        self.assertEqual(params[3].obj, {"inserted_count": 5})
         self.assertEqual(params[4], None)
 
     def test_finalize_automation_job_account_allows_optional_fields(self) -> None:
@@ -970,6 +976,7 @@ class AutomationDatabaseAdapterTests(unittest.TestCase):
 
         _, params = connection.cursor_instance.executed[0]
         self.assertEqual(params[2], None)
+        self.assertIsNone(params[3])
         self.assertEqual(params[4], "something went wrong")
 
     def test_resolve_automation_portfolio_accounts_maps_rows(self) -> None:
@@ -998,8 +1005,10 @@ class AutomationDatabaseAdapterTests(unittest.TestCase):
         connection = FakeConnection((3,))
         database = SuperFolioDatabase(connection)
 
+        stale_before = datetime(2026, 5, 1, 12, 30, tzinfo=timezone.utc)
+
         count = database.fail_stale_automation_runs(
-            stale_before=date(2026, 5, 1),
+            stale_before=stale_before,
             error_message="timed out",
         )
 
@@ -1007,7 +1016,12 @@ class AutomationDatabaseAdapterTests(unittest.TestCase):
         self.assertEqual(connection.commit_count, 1)
         sql, params = connection.cursor_instance.executed[0]
         self.assertEqual(sql, "SELECT public.fail_stale_automation_runs(%s, %s)")
-        self.assertEqual(params, (date(2026, 5, 1), "timed out"))
+        self.assertEqual(params, (stale_before, "timed out"))
+
+    def test_fail_stale_automation_runs_accepts_timestamp_cutoff(self) -> None:
+        hints = get_type_hints(SuperFolioDatabase.fail_stale_automation_runs)
+
+        self.assertIs(hints["stale_before"], datetime)
 
 
 if __name__ == "__main__":
