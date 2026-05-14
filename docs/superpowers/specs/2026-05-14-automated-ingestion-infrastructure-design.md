@@ -131,7 +131,7 @@ Historical jobs do not change if the portfolio membership changes later.
 
 ### Accounts target
 
-The initial GitHub Actions trigger accepts a comma-separated `account_external_ids` input scoped to the selected integration. The orchestrator trims whitespace, rejects empty tokens, deduplicates repeated ids, and resolves those external ids into active registered account rows for the integration's brokerage before job execution.
+The initial GitHub Actions trigger accepts a comma-separated `account_external_ids` input scoped to the selected integration. The orchestrator trims whitespace, ignores empty tokens, deduplicates repeated ids, and resolves those external ids into active registered account rows for the integration's brokerage before job execution.
 
 Unknown, inactive, or wrong-brokerage accounts fail preflight before account processing starts. The database stores resolved `account_id` child rows, not the raw user input text.
 
@@ -143,6 +143,8 @@ Both modes create `automation_jobs` and `automation_job_accounts` rows.
 - `load`: fetches, parses, and writes supported normalized records through existing ingestion boundaries.
 
 If fetch and parse complete successfully but no supported records are found for an account in the requested date range, that child account row is `succeeded` with zero counts.
+
+For load mode, an account run with only idempotent duplicate records and no new inserts is also `succeeded`.
 
 ### Preflight audit behavior
 
@@ -174,7 +176,7 @@ Parent final status:
 
 Child account status semantics:
 
-- `succeeded`: fetch/parse completed and, for load mode, ingestion completed without skipped-account or conflict conditions. Zero supported records is still success when fetch/parse completed cleanly.
+- `succeeded`: fetch/parse completed and, for load mode, ingestion completed without skipped-account or conflict conditions. Zero supported records and duplicates-only load results are still success when fetch/parse completed cleanly.
 - `partially_succeeded`: fetch/parse/load completed, but ingestion reported skipped records, inactive/unknown source records, or canonical-data conflicts that require review.
 - `failed`: fetch, parse, or account-level ingestion failed.
 
@@ -205,11 +207,13 @@ Add a manual `workflow_dispatch` workflow only. No schedule is enabled in this p
 
 Workflow responsibilities:
 
-- accept trigger inputs for target type, integration, mode, date range, `portfolio_name` for portfolio targets, and comma-separated `account_external_ids` for accounts targets.
+- accept broad manual trigger inputs for target type, integration, mode, date range, `portfolio_name` for portfolio targets, and comma-separated `account_external_ids` for accounts targets.
+- leave `portfolio_name` and `account_external_ids` optional at the YAML level; the orchestrator enforces that exactly one matching target input is present for the selected `target_type`.
 - expose required secrets/variables using the same key names as local `.env`.
 - call the Python orchestrator entrypoint.
 - publish the orchestrator's privacy-safe summary.
-- fail the workflow when the parent job final status is `failed` or `partially_succeeded`.
+- fail the workflow when the parent job final status is `failed`.
+- exit successfully for `partially_succeeded` jobs while writing a prominent warning summary for manual review.
 
 The workflow remains schedule-ready: a future cron trigger should call the same orchestrator path and produce the same database records.
 
@@ -296,7 +300,27 @@ They must not contain:
 - account values, NAV values, cash amounts, or other absolute financial values.
 - full broker response bodies.
 
-During manual testing, detailed diagnostics may be kept outside the database in local logs or workflow artifacts when needed, but those artifacts must still avoid credentials and connection strings.
+The `automation_job_accounts.summary` JSON shape is stable so future UI/API code can render results without parsing arbitrary fields. It should include:
+
+- `record_counts.cash_flows.supported`
+- `record_counts.cash_flows.inserted`
+- `record_counts.cash_flows.duplicates`
+- `record_counts.cash_flows.skipped_unknown_account`
+- `record_counts.cash_flows.skipped_inactive_account`
+- `record_counts.cash_flows.skipped_other_account`
+- `record_counts.cash_flows.conflicts`
+- `record_counts.daily_nav_snapshots.supported`
+- `record_counts.daily_nav_snapshots.inserted`
+- `record_counts.daily_nav_snapshots.duplicates`
+- `record_counts.daily_nav_snapshots.skipped_unknown_account`
+- `record_counts.daily_nav_snapshots.skipped_inactive_account`
+- `record_counts.daily_nav_snapshots.skipped_other_account`
+- `record_counts.daily_nav_snapshots.conflicts`
+- `error_category` when applicable
+
+Broker payloads that include records for accounts other than the requested account are counted as `skipped_other_account`, not treated as adapter errors.
+
+During manual testing, detailed diagnostics may be kept outside the database in sanitized local logs or sanitized workflow artifacts when needed. Raw broker payload artifacts are out of scope for this phase unless a later design explicitly adds them.
 
 ## Concurrency and recovery
 
@@ -323,14 +347,18 @@ If the orchestrator crashes or the workflow is cancelled after marking a parent 
 - target resolution for portfolio and account targets.
 - inactive portfolio rejection.
 - active-only ingestion resolution for portfolio targets.
-- account target trimming, deduplication, and unknown/inactive account rejection.
+- account target trimming, empty-token ignoring, deduplication, and unknown/inactive account rejection.
 - snapshot behavior for resolved accounts.
 - dry-run versus load routing.
 - child status aggregation into parent status.
 - continue-on-error account loop.
 - preflight failure persistence as failed parent job when DB is reachable.
 - empty supported-record result as success with zero counts.
+- duplicates-only load result as success.
 - sanitized summary/error storage.
+- stable child summary JSON shape.
+- partial job workflow exit 0 with prominent warning summary.
+- skipped-other-account counting.
 - overlapping load job blocking.
 - stale-running cleanup/finalization behavior.
 
@@ -343,6 +371,7 @@ If the orchestrator crashes or the workflow is cancelled after marking a parent 
 ### Workflow wiring
 
 - manual trigger invokes the orchestrator with representative inputs.
+- workflow fails for parent `failed` and succeeds with a warning for parent `partially_succeeded`.
 - no cron trigger is enabled.
 
 ## Future IBKR fetch-internals design
