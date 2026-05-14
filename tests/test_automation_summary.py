@@ -261,6 +261,50 @@ class SanitizeErrorMessageTests(unittest.TestCase):
         self.assertNotIn("99999.00", result)
         self.assertIn("[redacted]", result)
 
+    def test_does_not_corrupt_compound_word_monkey(self) -> None:
+        """'monkey=abc123' must not partially redact the field name."""
+        msg = "monkey=abc123 is not a secret"
+        result = sanitize_error_message(msg)
+        self.assertIsNotNone(result)
+        self.assertIn("monkey=", result)
+
+    def test_does_not_corrupt_compound_word_primary_key(self) -> None:
+        """'primary_key=123' must not redact the field name portion."""
+        msg = "primary_key=123 not found in table"
+        result = sanitize_error_message(msg)
+        self.assertIsNotNone(result)
+        self.assertIn("primary_key=", result)
+
+    def test_does_not_corrupt_compound_word_foreign_key(self) -> None:
+        """'foreign_key=abc-xyz' must not redact the field name portion."""
+        msg = "foreign_key=abc-xyz already exists"
+        result = sanitize_error_message(msg)
+        self.assertIsNotNone(result)
+        self.assertIn("foreign_key=", result)
+
+    def test_does_not_corrupt_compound_word_cache_key(self) -> None:
+        """'cache_key=sess_deadbeef' must not redact the field name portion."""
+        msg = "cache_key=sess_deadbeef expired"
+        result = sanitize_error_message(msg)
+        self.assertIsNotNone(result)
+        self.assertIn("cache_key=", result)
+
+    def test_standalone_key_still_redacted(self) -> None:
+        """Standalone 'key=...' must still be redacted."""
+        msg = "key=supersecret123 was used"
+        result = sanitize_error_message(msg)
+        self.assertIsNotNone(result)
+        self.assertNotIn("supersecret123", result)
+        self.assertIn("[redacted]", result)
+
+    def test_api_key_still_redacted(self) -> None:
+        """'api_key=...' must still be redacted."""
+        msg = "api_key=ABCDE12345 is invalid"
+        result = sanitize_error_message(msg)
+        self.assertIsNotNone(result)
+        self.assertNotIn("ABCDE12345", result)
+        self.assertIn("[redacted]", result)
+
     def test_truncates_to_500_chars(self) -> None:
         long_msg = "x" * 1000
         result = sanitize_error_message(long_msg)

@@ -8,9 +8,11 @@ _POSTGRES_URL_RE = re.compile(
     re.IGNORECASE,
 )
 
-# Match key=value assignments for sensitive field names
+# Match key=value assignments for sensitive field names.
+# Word boundaries ensure we only match standalone keywords (e.g. "key=", "api_key=")
+# and not keywords embedded in compound identifiers (e.g. "primary_key=", "monkey=").
 _SECRET_ASSIGNMENT_RE = re.compile(
-    r"(?:token|password|secret|key|api_key)\s*=\s*\S+",
+    r"\b(?:token|password|secret|api_key|key)\b\s*=\s*\S+",
     re.IGNORECASE,
 )
 
