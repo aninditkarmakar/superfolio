@@ -1,0 +1,103 @@
+name: Manual Automated Ingestion
+
+on:
+  workflow_dispatch:
+    inputs:
+      target_type:
+        description: "Target type"
+        required: true
+        type: choice
+        options:
+          - portfolio
+          - accounts
+      integration:
+        description: "Integration key"
+        required: false
+        default: ibkr_flex_ws
+        type: string
+      mode:
+        description: "Run mode"
+        required: true
+        type: choice
+        options:
+          - dry-run
+          - load
+      start_date:
+        description: "Start date (YYYY-MM-DD)"
+        required: true
+        type: string
+      end_date:
+        description: "End date (YYYY-MM-DD)"
+        required: true
+        type: string
+      portfolio_name:
+        description: "Portfolio name (required when target_type=portfolio)"
+        required: false
+        default: ""
+        type: string
+      account_external_ids:
+        description: "Comma-separated account external IDs (required when target_type=accounts)"
+        required: false
+        default: ""
+        type: string
+
+jobs:
+  ingest:
+    name: Run ingestion (${{ inputs.target_type }} / ${{ inputs.mode }})
+    runs-on: ubuntu-latest
+
+    env:
+      DATABASE_URL: ${{ secrets.DATABASE_URL }}
+      IBKR_FLEX_TOKEN: ${{ secrets.IBKR_FLEX_TOKEN }}
+      IBKR_FLEX_QUERY_ID: ${{ secrets.IBKR_FLEX_QUERY_ID }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run automated ingestion
+        id: ingestion
+        run: |
+          EXTRA_FLAGS=""
+          if [ -n "${{ inputs.portfolio_name }}" ]; then
+            EXTRA_FLAGS="$EXTRA_FLAGS --portfolio-name ${{ inputs.portfolio_name }}"
+          fi
+          if [ -n "${{ inputs.account_external_ids }}" ]; then
+            EXTRA_FLAGS="$EXTRA_FLAGS --account-external-ids ${{ inputs.account_external_ids }}"
+          fi
+
+          python scripts/run_automated_ingestion.py \
+            --target-type ${{ inputs.target_type }} \
+            --integration ${{ inputs.integration }} \
+            --mode ${{ inputs.mode }} \
+            --start-date ${{ inputs.start_date }} \
+            --end-date ${{ inputs.end_date }} \
+            $EXTRA_FLAGS 2>&1 | tee ingestion_output.txt
+
+          EXIT_CODE=${PIPESTATUS[0]}
+
+          # Publish output to step summary
+          echo "## Ingestion Run Summary" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Parameter | Value |" >> "$GITHUB_STEP_SUMMARY"
+          echo "|-----------|-------|" >> "$GITHUB_STEP_SUMMARY"
+          echo "| target_type | ${{ inputs.target_type }} |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| integration | ${{ inputs.integration }} |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| mode | ${{ inputs.mode }} |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| start_date | ${{ inputs.start_date }} |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| end_date | ${{ inputs.end_date }} |" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "### CLI Output" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          cat ingestion_output.txt >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+
+          exit $EXIT_CODE
