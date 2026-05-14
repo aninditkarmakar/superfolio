@@ -212,6 +212,22 @@ class MigrationContractTests(unittest.TestCase):
         ):
             self.assertIn(f"DROP FUNCTION IF EXISTS {name}", sql)
 
+    def test_automation_layer_finalizers_reject_non_terminal_statuses(self) -> None:
+        sql = (MIGRATIONS_DIR / "deploy" / "create_automation_layer.sql").read_text(encoding="utf-8")
+
+        self.assertEqual(
+            2,
+            sql.count("v_status NOT IN ('succeeded', 'partially_succeeded', 'failed')"),
+        )
+        self.assertIn("Invalid final automation job status", sql)
+        self.assertIn("Invalid final automation job account status", sql)
+
+    def test_automation_layer_verify_lifecycle_functions_uses_non_throwing_resolution(self) -> None:
+        sql = (MIGRATIONS_DIR / "verify" / "create_automation_layer.sql").read_text(encoding="utf-8")
+
+        self.assertIn("to_regprocedure('public.create_automation_job", sql)
+        self.assertNotIn("'public.create_automation_job(text,text,uuid,text,text,date,date)'::regprocedure", sql)
+
 
 if __name__ == "__main__":
     unittest.main()

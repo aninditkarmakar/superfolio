@@ -147,6 +147,10 @@ DECLARE
 BEGIN
     v_status := lower(btrim(p_status));
 
+    IF v_status NOT IN ('succeeded', 'partially_succeeded', 'failed') THEN
+        RAISE EXCEPTION 'Invalid final automation job status: %', p_status;
+    END IF;
+
     UPDATE public.automation_jobs
     SET status = v_status,
         summary = p_summary,
@@ -229,6 +233,10 @@ DECLARE
     v_status TEXT;
 BEGIN
     v_status := lower(btrim(p_status));
+
+    IF v_status NOT IN ('succeeded', 'partially_succeeded', 'failed') THEN
+        RAISE EXCEPTION 'Invalid final automation job account status: %', p_status;
+    END IF;
 
     UPDATE public.automation_job_accounts
     SET status = v_status,

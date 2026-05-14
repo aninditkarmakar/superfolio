@@ -21,11 +21,12 @@ WHERE conname IN (
 );
 
 SELECT 1 / (count(*) = 5)::int
-FROM pg_proc
-WHERE oid IN (
-    'public.create_automation_job(text,text,uuid,text,text,date,date)'::regprocedure,
-    'public.finalize_automation_job(uuid,text,jsonb,text)'::regprocedure,
-    'public.add_automation_job_account(uuid,uuid)'::regprocedure,
-    'public.mark_automation_job_account_running(uuid)'::regprocedure,
-    'public.finalize_automation_job_account(uuid,text,uuid,jsonb,text)'::regprocedure
-);
+FROM (
+    VALUES
+        (to_regprocedure('public.create_automation_job(text,text,uuid,text,text,date,date)')),
+        (to_regprocedure('public.finalize_automation_job(uuid,text,jsonb,text)')),
+        (to_regprocedure('public.add_automation_job_account(uuid,uuid)')),
+        (to_regprocedure('public.mark_automation_job_account_running(uuid)')),
+        (to_regprocedure('public.finalize_automation_job_account(uuid,text,uuid,jsonb,text)'))
+) AS functions(signature)
+WHERE signature IS NOT NULL;
