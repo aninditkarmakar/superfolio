@@ -64,6 +64,8 @@ Key fields:
   - `load`
 - `status text not null`
   - reuse lifecycle vocabulary: `pending`, `running`, `succeeded`, `partially_succeeded`, `failed`
+- `summary jsonb null`
+  - privacy-safe aggregate child status totals and aggregate record-count totals.
 - `requested_start_date date null`
 - `requested_end_date date null`
 - `error_message text null`
@@ -134,6 +136,8 @@ Historical jobs do not change if the portfolio membership changes later.
 The initial GitHub Actions trigger accepts a comma-separated `account_external_ids` input scoped to the selected integration. The orchestrator trims whitespace, ignores empty tokens, deduplicates repeated ids, and resolves those external ids into active registered account rows for the integration's brokerage before job execution.
 
 Unknown, inactive, or wrong-brokerage accounts fail preflight before account processing starts. The database stores resolved `account_id` child rows, not the raw user input text.
+
+Cross-field validation errors should name the selected `target_type` and expected/rejected inputs. For example: `target_type=portfolio requires portfolio_name and rejects account_external_ids`.
 
 ### Dry-run and load
 
@@ -231,6 +235,7 @@ Required content for each integration:
 - `adapter_path` or registry key
 - `supported_modes`
 - `required_env_keys`
+- default stale-running timeout
 
 Initial mapping:
 
@@ -320,15 +325,25 @@ The `automation_job_accounts.summary` JSON shape is stable so future UI/API code
 
 Broker payloads that include records for accounts other than the requested account are counted as `skipped_other_account`, not treated as adapter errors.
 
+If a broker response contains only records for accounts other than the requested account, the requested account child is still `succeeded` when fetch/parse completed cleanly. It records zero requested-account supported records plus the relevant `skipped_other_account` counts.
+
+The `automation_jobs.summary` JSON shape is stable and aggregates child results for future UI/API rendering. It should include:
+
+- `account_counts.total`
+- `account_counts.succeeded`
+- `account_counts.partially_succeeded`
+- `account_counts.failed`
+- aggregate `record_counts` using the same cash-flow and daily-NAV keys as child summaries.
+
 During manual testing, detailed diagnostics may be kept outside the database in sanitized local logs or sanitized workflow artifacts when needed. Raw broker payload artifacts are out of scope for this phase unless a later design explicitly adds them.
 
 ## Concurrency and recovery
 
-Overlapping concurrent `load` jobs for the same integration, account, and requested date range should be blocked. Dry-run jobs may overlap with other dry-runs or load jobs because they do not write normalized facts or account-scoped `ingestion_runs`.
+Overlapping concurrent `load` jobs for the same integration and account should be blocked when their requested date windows intersect. Dry-run jobs may overlap with other dry-runs or load jobs because they do not write normalized facts or account-scoped `ingestion_runs`.
 
 The implementation should use a database-backed locking strategy, such as PostgreSQL advisory locks, so concurrent workflow runs cannot both load the same account/date window. Locking failures should mark the affected child account row as `failed` or fail preflight when no account processing has started.
 
-If the orchestrator crashes or the workflow is cancelled after marking a parent or child row `running`, a later run or maintenance routine must be able to mark stale `running` rows as `failed` with a sanitized timeout/cancellation reason.
+At the start of each run, the orchestrator should mark stale `running` parent/child rows as `failed` with a sanitized timeout/cancellation reason. The stale-running timeout is configurable in repo config with a documented default.
 
 ## Testing strategy
 
@@ -341,6 +356,7 @@ If the orchestrator crashes or the workflow is cancelled after marking a parent 
 - verify manual jobs require both requested start and end dates.
 - verify dry-run child rows do not link to `ingestion_runs`.
 - verify automation lifecycle writes are available through PostgreSQL functions.
+- verify parent job summary shape can store account totals and aggregate record-count totals.
 
 ### Orchestrator unit tests
 
@@ -348,6 +364,7 @@ If the orchestrator crashes or the workflow is cancelled after marking a parent 
 - inactive portfolio rejection.
 - active-only ingestion resolution for portfolio targets.
 - account target trimming, empty-token ignoring, deduplication, and unknown/inactive account rejection.
+- explicit cross-field validation messages for target-specific inputs.
 - snapshot behavior for resolved accounts.
 - dry-run versus load routing.
 - child status aggregation into parent status.
@@ -357,10 +374,14 @@ If the orchestrator crashes or the workflow is cancelled after marking a parent 
 - duplicates-only load result as success.
 - sanitized summary/error storage.
 - stable child summary JSON shape.
+- stable parent summary JSON shape.
 - partial job workflow exit 0 with prominent warning summary.
 - skipped-other-account counting.
+- other-account-only payload result as success with skipped-other-account counts.
 - overlapping load job blocking.
+- intersecting date-window overlap detection.
 - stale-running cleanup/finalization behavior.
+- configurable stale-running timeout behavior.
 
 ### Adapter tests
 
