@@ -19,12 +19,17 @@ class MasterKey:
     fernet: Fernet
 
 
-@dataclass(frozen=True)
 class SecretValue:
-    _value: str
+    """Holds a secret string. Has no __dict__ so vars() and dataclasses.asdict() both raise TypeError."""
+
+    __slots__ = ("__secret",)
+
+    def __init__(self, value: str) -> None:
+        # Use object.__setattr__ to write through the slot without a setter
+        object.__setattr__(self, "_SecretValue__secret", value)
 
     def reveal(self) -> str:
-        return self._value
+        return self.__secret  # type: ignore[attr-defined]
 
     def __str__(self) -> str:
         return "<redacted>"
@@ -48,7 +53,11 @@ def encrypt_secret(plaintext: str, master_key: MasterKey) -> bytes:
 
 def decrypt_secret(ciphertext: bytes, master_key: MasterKey) -> SecretValue:
     try:
-        plaintext = master_key.fernet.decrypt(ciphertext).decode("utf-8")
-    except (InvalidToken, UnicodeDecodeError) as error:
-        raise CredentialDecryptionError("credential_decryption_failed") from error
+        raw = master_key.fernet.decrypt(ciphertext)
+    except InvalidToken:
+        raise CredentialDecryptionError("credential_decryption_failed") from None
+    try:
+        plaintext = raw.decode("utf-8")
+    except UnicodeDecodeError:
+        raise CredentialDecryptionError("credential_decryption_failed") from None
     return SecretValue(plaintext)

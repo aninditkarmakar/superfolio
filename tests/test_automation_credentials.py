@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import dataclasses
 import unittest
 from cryptography.fernet import Fernet
 
@@ -21,11 +22,29 @@ class SecretValueTests(unittest.TestCase):
         self.assertEqual(repr(secret), "<redacted>")
         self.assertEqual(secret.reveal(), "super-secret")
 
+    def test_vars_raises_type_error(self) -> None:
+        secret = SecretValue("topsecret")
+        with self.assertRaises(TypeError):
+            vars(secret)
+
+    def test_dataclasses_asdict_raises_type_error(self) -> None:
+        secret = SecretValue("topsecret")
+        with self.assertRaises(TypeError):
+            dataclasses.asdict(secret)
+
 
 class CredentialEncryptionTests(unittest.TestCase):
     def test_load_master_key_rejects_missing_value(self) -> None:
         with self.assertRaisesRegex(CredentialMasterKeyError, "missing"):
             load_master_key(None)
+
+    def test_load_master_key_rejects_empty_string(self) -> None:
+        with self.assertRaisesRegex(CredentialMasterKeyError, "missing"):
+            load_master_key("")
+
+    def test_load_master_key_rejects_whitespace_only(self) -> None:
+        with self.assertRaisesRegex(CredentialMasterKeyError, "missing"):
+            load_master_key("   ")
 
     def test_load_master_key_rejects_malformed_value(self) -> None:
         with self.assertRaisesRegex(CredentialMasterKeyError, "invalid"):
@@ -49,6 +68,17 @@ class CredentialEncryptionTests(unittest.TestCase):
 
         with self.assertRaisesRegex(CredentialDecryptionError, "credential_decryption_failed"):
             decrypt_secret(bytes(ciphertext), key)
+
+    def test_invalid_utf8_ciphertext_raises_sanitized_error_without_cause(self) -> None:
+        key = load_master_key(Fernet.generate_key().decode("ascii"))
+        # Encrypt raw non-UTF-8 bytes directly via fernet to trigger UnicodeDecodeError
+        ciphertext = key.fernet.encrypt(b"\x80")
+
+        with self.assertRaises(CredentialDecryptionError) as ctx:
+            decrypt_secret(ciphertext, key)
+
+        self.assertEqual(str(ctx.exception), "credential_decryption_failed")
+        self.assertIsNone(ctx.exception.__cause__)
 
 
 if __name__ == "__main__":
