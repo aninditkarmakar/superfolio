@@ -85,21 +85,18 @@ def load_payload(
             else None
         )
     except Exception as exc:
-        try:
-            database.complete_ingestion_run(
-                ingestion_run_id=ingestion_run_id,
-                status="failed",
-                error_message=sanitize_error_message(str(exc)),
-            )
-        except Exception as cleanup_exc:
-            exc.add_note(f"additionally, cleanup complete_ingestion_run raised: {cleanup_exc}")
+        _complete_failed_ingestion_run(database, ingestion_run_id, str(exc), exc)
         raise
 
-    database.complete_ingestion_run(
-        ingestion_run_id=ingestion_run_id,
-        status=status,
-        error_message=message,
-    )
+    try:
+        database.complete_ingestion_run(
+            ingestion_run_id=ingestion_run_id,
+            status=status,
+            error_message=message,
+        )
+    except Exception as exc:
+        _complete_failed_ingestion_run(database, ingestion_run_id, str(exc), exc)
+        raise
 
     child_summary = build_child_summary(
         cash_supported=analysis.cash_flow_count,
@@ -119,6 +116,30 @@ def load_payload(
     )
 
     return ingestion_run_id, status, child_summary, message
+
+
+def _complete_failed_ingestion_run(
+    database: Any,
+    ingestion_run_id: str,
+    error_message: str,
+    original_exc: BaseException,
+) -> None:
+    """Attempt to complete an ingestion run as failed.
+
+    If the cleanup completion call itself raises, attaches the cleanup failure as a
+    note on ``original_exc`` and returns.  The caller is responsible for re-raising
+    ``original_exc``; this helper never raises.
+    """
+    try:
+        database.complete_ingestion_run(
+            ingestion_run_id=ingestion_run_id,
+            status="failed",
+            error_message=sanitize_error_message(error_message),
+        )
+    except Exception as cleanup_exc:
+        original_exc.add_note(
+            f"additionally, cleanup complete_ingestion_run raised: {cleanup_exc}"
+        )
 
 
 def _empty_bulk_summary() -> BulkIngestionSummary:

@@ -1755,11 +1755,12 @@ class AutomationLoadCleanupExceptionEdgeCaseTests(unittest.TestCase):
             f"Expected cleanup context in __notes__ but got: {notes!r}",
         )
 
-    # --- Issue 2 orchestrator-level test ---
+    # --- Issue 2 orchestrator-level tests ---
 
-    def test_issue2_success_complete_failure_not_retried_child_finalized_failed(self):
-        """Issue 2: when success complete_ingestion_run raises, it must not be retried with
-        failed status; complete must be called exactly once, child finalized failed."""
+    def test_issue2_success_complete_raises_cleanup_also_raises_child_finalized_failed(self):
+        """Issue 2: when success complete_ingestion_run raises and cleanup also raises,
+        complete must be called exactly twice (success attempt + cleanup attempt),
+        child finalized failed with the original success-completion error."""
         request = self._make_request()
         db = FakeAutomationDatabase()
         db.account_targets = [self._make_account_target()]
@@ -1775,20 +1776,55 @@ class AutomationLoadCleanupExceptionEdgeCaseTests(unittest.TestCase):
         # Default adapter returns empty XML — no bulk calls, success path hits complete
         result = self._run(request, db)
 
-        # complete_ingestion_run must be called exactly once (success path, not retried)
-        self.assertEqual(len(complete_calls), 1,
-                         f"Expected exactly 1 complete call but got statuses: {complete_calls}")
+        # complete_ingestion_run must be called twice: once for success, once for cleanup
+        self.assertEqual(len(complete_calls), 2,
+                         f"Expected 2 complete calls (success + cleanup) but got: {complete_calls}")
+        self.assertEqual(complete_calls[1], "failed",
+                         "Second call must be the cleanup call with status='failed'")
         self.assertEqual(result.status, "failed")
         self.assertEqual(len(db.finalized_children), 1)
         child_fin = db.finalized_children[0]
         self.assertEqual(child_fin.status, "failed")
         self.assertIn("completion failed", child_fin.error_message or "")
 
-    # --- Issue 2 load_payload unit-level test ---
+    def test_issue2_success_complete_raises_cleanup_succeeds_child_finalized_failed(self):
+        """Issue 2: when success complete_ingestion_run raises but cleanup completion succeeds,
+        complete is called twice (success attempt + cleanup), child is finalized failed,
+        and the DB records the cleanup completion."""
+        request = self._make_request()
+        db = FakeAutomationDatabase()
+        db.account_targets = [self._make_account_target()]
 
-    def test_issue2_load_payload_success_complete_called_exactly_once(self):
+        complete_calls: list[str] = []
+
+        def raising_on_success_only(*, ingestion_run_id, status, error_message):
+            complete_calls.append(status)
+            if status != "failed":
+                raise RuntimeError("success complete failed")
+            # cleanup call succeeds: record it
+            db.completed_ingestion_runs.append((ingestion_run_id, status, error_message))
+
+        db.complete_ingestion_run = raising_on_success_only  # type: ignore
+
+        result = self._run(request, db)
+
+        self.assertEqual(len(complete_calls), 2,
+                         f"Expected 2 complete calls but got: {complete_calls}")
+        self.assertEqual(complete_calls[0], "succeeded")
+        self.assertEqual(complete_calls[1], "failed")
+        self.assertEqual(result.status, "failed")
+        child_fin = db.finalized_children[0]
+        self.assertEqual(child_fin.status, "failed")
+        self.assertIn("success complete failed", child_fin.error_message or "")
+        # Cleanup completion recorded in DB
+        self.assertEqual(len(db.completed_ingestion_runs), 1)
+        self.assertEqual(db.completed_ingestion_runs[0][1], "failed")
+
+    # --- Issue 2 load_payload unit-level tests ---
+
+    def test_issue2_load_payload_success_complete_raises_attempts_cleanup(self):
         """Issue 2 (load_payload unit): when success complete_ingestion_run raises,
-        it must not be retried; the exception propagates directly."""
+        it attempts exactly one cleanup call with status='failed', then re-raises original."""
         from portfolio_engine.automation.ingestion import load_payload
 
         db = FakeAutomationDatabase()
@@ -1815,9 +1851,74 @@ class AutomationLoadCleanupExceptionEdgeCaseTests(unittest.TestCase):
             )
 
         self.assertIn("completion failed", str(ctx.exception))
-        # Must be called exactly once — no retry with "failed" status
-        self.assertEqual(len(complete_calls), 1,
-                         f"Expected exactly 1 complete call but got statuses: {complete_calls}")
+        # Must be called twice: success attempt + exactly one cleanup attempt
+        self.assertEqual(len(complete_calls), 2,
+                         f"Expected 2 complete calls (success + cleanup) but got: {complete_calls}")
+        self.assertEqual(complete_calls[1], "failed",
+                         "Second call must be cleanup with status='failed'")
+
+    def test_issue2_load_payload_success_complete_raises_cleanup_also_raises_has_note(self):
+        """Issue 2 (load_payload unit): when success complete raises and cleanup also raises,
+        original exception is re-raised with a note about the cleanup failure."""
+        from portfolio_engine.automation.ingestion import load_payload
+
+        db = FakeAutomationDatabase()
+
+        def always_raising_complete(*, ingestion_run_id, status, error_message):
+            raise RuntimeError("completion failed")
+
+        db.complete_ingestion_run = always_raising_complete  # type: ignore
+
+        with self.assertRaises(RuntimeError) as ctx:
+            load_payload(
+                "<FlexQueryResponse></FlexQueryResponse>",
+                database=db,
+                brokerage_code="IBKR",
+                account_external_id="U100",
+                source_type="FLEX_WEB_SERVICE",
+                source_name="test.xml",
+                start_date="2024-01-01",
+                end_date="2024-01-31",
+            )
+
+        exc = ctx.exception
+        self.assertIn("completion failed", str(exc))
+        notes = getattr(exc, "__notes__", None) or []
+        self.assertTrue(
+            any("completion failed" in note for note in notes),
+            f"Expected cleanup context in __notes__ but got: {notes!r}",
+        )
+
+    def test_issue2_load_payload_success_complete_raises_cleanup_succeeds_reraises_original(self):
+        """Issue 2 (load_payload unit): when success complete raises but cleanup succeeds,
+        original exception is still re-raised."""
+        from portfolio_engine.automation.ingestion import load_payload
+
+        db = FakeAutomationDatabase()
+
+        def raising_on_success_only(*, ingestion_run_id, status, error_message):
+            if status != "failed":
+                raise RuntimeError("success complete raised")
+            db.completed_ingestion_runs.append((ingestion_run_id, status, error_message))
+
+        db.complete_ingestion_run = raising_on_success_only  # type: ignore
+
+        with self.assertRaises(RuntimeError) as ctx:
+            load_payload(
+                "<FlexQueryResponse></FlexQueryResponse>",
+                database=db,
+                brokerage_code="IBKR",
+                account_external_id="U100",
+                source_type="FLEX_WEB_SERVICE",
+                source_name="test.xml",
+                start_date="2024-01-01",
+                end_date="2024-01-31",
+            )
+
+        self.assertIn("success complete raised", str(ctx.exception))
+        # Cleanup completion succeeded and was recorded
+        self.assertEqual(len(db.completed_ingestion_runs), 1)
+        self.assertEqual(db.completed_ingestion_runs[0][1], "failed")
 
 
 if __name__ == "__main__":
