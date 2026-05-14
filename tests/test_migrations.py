@@ -167,6 +167,20 @@ class MigrationContractTests(unittest.TestCase):
 
         self.assertLess(child_pos, parent_pos)
 
+    def test_automation_layer_verify_constraint_check_raises_on_mismatch(self) -> None:
+        sql = (MIGRATIONS_DIR / "verify" / "create_automation_layer.sql").read_text(encoding="utf-8")
+
+        self.assertIn("SELECT 1 / (count(*) = 4)::int", sql)
+
+    def test_automation_layer_dates_are_nullable_with_manual_check(self) -> None:
+        sql = (MIGRATIONS_DIR / "deploy" / "create_automation_layer.sql").read_text(encoding="utf-8")
+
+        self.assertIn("requested_start_date DATE,", sql)
+        self.assertIn("requested_end_date DATE,", sql)
+        self.assertIn("automation_jobs_manual_dates_required_check", sql)
+        self.assertNotIn("requested_start_date DATE NOT NULL", sql)
+        self.assertNotIn("requested_end_date DATE NOT NULL", sql)
+
 
 if __name__ == "__main__":
     unittest.main()

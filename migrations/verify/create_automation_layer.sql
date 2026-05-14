@@ -11,12 +11,11 @@ SELECT id, automation_job_id, account_id, status, ingestion_run_id, summary,
 FROM public.automation_job_accounts
 WHERE false;
 
-SELECT 1
+SELECT 1 / (count(*) = 4)::int
 FROM pg_constraint
 WHERE conname IN (
     'automation_jobs_target_type_check',
     'automation_jobs_portfolio_target_check',
     'automation_jobs_manual_dates_required_check',
     'automation_job_accounts_unique_account'
-)
-HAVING count(*) = 4;
+);
