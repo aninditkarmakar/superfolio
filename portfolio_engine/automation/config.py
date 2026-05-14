@@ -60,6 +60,8 @@ def _string_tuple_field(key: str, raw: dict[object, object], field: str) -> tupl
     value = raw[field]
     if not isinstance(value, list):
         raise ValueError(f"integration '{key}' field {field} must be a list")
+    if any(item is None for item in value):
+        raise ValueError(f"integration '{key}' field {field} contains a null item")
     return tuple(str(item) for item in value)
 
 
@@ -74,7 +76,10 @@ def _int_field(key: str, raw: dict[object, object], field: str) -> int:
     value = raw[field]
     if value is None:
         raise ValueError(f"integration '{key}' field {field} must not be null")
-    return int(value)
+    try:
+        return int(value)
+    except (TypeError, ValueError) as error:
+        raise ValueError(f"integration '{key}' field {field} must be an integer") from error
 
 
 def _load_simple_yaml(path: Path) -> dict[str, object]:
