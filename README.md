@@ -180,7 +180,7 @@ The command prints a portfolio summary to stdout. The optional daily CSV include
 | `portfolio_engine.csv_export` | `write_daily_twr_csv` for downstream analysis |
 | `portfolio_engine.db_twr` | Single-account database-backed TWR calculation |
 | `portfolio_engine.portfolio_twr` | Portfolio-level TWR aggregation across multiple accounts with transfer bridge support |
-| `portfolio_engine.portfolio_db_twr` | Database queries for portfolio NAV, cash flows, and transfer bridges |
+| `portfolio_engine.portfolio_db_twr` | Database-backed portfolio TWR CLI/orchestrator: argument parsing, DB fetch orchestration, optional CSV output, and summary printing |
 | `portfolio_engine.portfolio_cli` | CLI helpers for portfolio management commands |
 
 ## 💻 Development Environment

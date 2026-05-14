@@ -1,6 +1,6 @@
 # Database Schema
 
-This document describes the MVP PostgreSQL schema deployed by `migrations/deploy/create_mvp_schema.sql`. The schema stores account-scoped IBKR Flex ingestion data, deduplicates broker-origin records, keeps raw source records separate from normalized portfolio facts, and supports logical portfolio groupings across multiple accounts.
+This document describes the PostgreSQL schema deployed across two migrations: `migrations/deploy/create_mvp_schema.sql` (account registration, ingestion runs, source records, cash flows, and daily NAV snapshots) and `migrations/deploy/create_portfolio_layer.sql` (portfolios, portfolio accounts, and transfer bridges). The schema stores account-scoped IBKR Flex ingestion data, deduplicates broker-origin records, keeps raw source records separate from normalized portfolio facts, and supports logical portfolio groupings across multiple accounts.
 
 ## Relationship overview
 
