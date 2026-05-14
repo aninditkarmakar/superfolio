@@ -86,7 +86,7 @@ Key constraints:
 
 ### `portfolios`
 
-Stores saved portfolio calculation/view definitions. A portfolio has a display name, reporting currency, active flag, and references brokerage accounts through `portfolio_accounts`.
+Stores saved portfolio calculation/view definitions. A portfolio has a unique name used as its lookup key, a reporting currency, an active flag, and references brokerage accounts through `portfolio_accounts`.
 
 ### `portfolio_accounts`
 
