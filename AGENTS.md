@@ -38,4 +38,9 @@
 - When adding tests, include small synthetic XML fixtures that cover the current sample shapes: `CashTransaction` records and `EquitySummaryByReportDateInBase` daily snapshots.
 
 ## Git And Branching
-- Never automatically merge feature branches onto `main`. Always ask for the user's explicit approval before merging, even when work is complete and checks pass.
+- Never make code or documentation changes directly on `main`.
+- Treat `dev` as the dedicated development integration branch. Create feature branches from `dev`, and target completed feature branches back to `dev`.
+- Never automatically merge any branch, including merges into `dev`. All merge requests require the repository owner's explicit manual approval.
+- Never merge anything into `main`. Only the repository owner manually promotes commits from `dev` to `main`.
+- Prefer working in a normal feature branch in the current checkout. Do not use git worktrees unless the user explicitly asks for one.
+- This is a solo project; do not assume collaborator coordination is required unless the user says otherwise.

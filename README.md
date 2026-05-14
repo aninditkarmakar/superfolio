@@ -36,8 +36,11 @@ portfolio_engine/        # Python calculation engine (no third-party deps)
   csv_export.py          # CSV writer for daily TWR output
 
 scripts/
-  calculate_twr.py          # End-to-end CLI: Flex XML -> TWR -> optional CSV export
-  calculate_twr_from_db.py  # Database CLI: PostgreSQL facts -> TWR -> optional CSV export
+  calculate_twr.py                       # End-to-end CLI: Flex XML -> TWR -> optional CSV export
+  calculate_twr_from_db.py               # Database CLI: single-account PostgreSQL facts -> TWR -> optional CSV export
+  calculate_portfolio_twr_from_db.py     # Database CLI: portfolio-level TWR across all member accounts
+  manage_portfolio.py                    # Portfolio management CLI: create, attach-account, create-bridge
+  register_account.py                    # Register a brokerage account before ingestion
 
 migrations/
   deploy/                # Sqitch deploy scripts
@@ -117,6 +120,49 @@ The command uses `DATABASE_URL` by default. Pass `--database-url` to override it
 | `--end-date` | none | Filter window end (`YYYY-MM-DD`). |
 | `--daily-output` | none | Optional CSV path for daily TWR rows. |
 
+### Managing consolidated portfolios
+
+Create a logical portfolio and attach existing registered accounts:
+
+```bash
+python scripts/manage_portfolio.py create \
+  --name "All Accounts" \
+  --reporting-currency USD
+
+python scripts/manage_portfolio.py attach-account \
+  --portfolio-name "All Accounts" \
+  --brokerage-code IBKR \
+  --account-external-id U100
+```
+
+Transfer bridges can cover assets that are temporarily outside account NAV during an internal transfer:
+
+```bash
+python scripts/manage_portfolio.py create-bridge \
+  --portfolio-name "All Accounts" \
+  --source-brokerage-code IBKR \
+  --source-account-external-id U100 \
+  --destination-brokerage-code IBKR \
+  --destination-account-external-id U200 \
+  --departure-date 2026-01-02 \
+  --arrival-date 2026-01-04 \
+  --value 5000.00 \
+  --currency USD
+```
+
+### Running portfolio-level database TWR
+
+```bash
+python scripts/calculate_portfolio_twr_from_db.py \
+  --portfolio-name "All Accounts" \
+  --reporting-currency USD \
+  --start-date 2026-01-01 \
+  --end-date 2026-01-31 \
+  --daily-output output/portfolio-twr.csv
+```
+
+The command prints a portfolio summary to stdout. The optional daily CSV includes portfolio NAV, net external cash flow, transfer bridge value, missing-NAV diagnostics, period return, and cumulative TWR.
+
 ### Flex XML Record Types Used
 
 | Element | Purpose |
@@ -132,6 +178,10 @@ The command uses `DATABASE_URL` by default. Pass `--database-url` to override it
 | `portfolio_engine.flex_xml` | Structured XML parsing with date filtering and FX normalization |
 | `portfolio_engine.twr` | `align_flows_to_nav_dates` + `calculate_twr` with start/end flow-timing modes |
 | `portfolio_engine.csv_export` | `write_daily_twr_csv` for downstream analysis |
+| `portfolio_engine.db_twr` | Single-account database-backed TWR calculation |
+| `portfolio_engine.portfolio_twr` | Portfolio-level TWR aggregation across multiple accounts with transfer bridge support |
+| `portfolio_engine.portfolio_db_twr` | Database-backed portfolio TWR CLI/orchestrator: argument parsing, DB fetch orchestration, optional CSV output, and summary printing |
+| `portfolio_engine.portfolio_cli` | CLI helpers for portfolio management commands |
 
 ## 💻 Development Environment
 
@@ -147,16 +197,10 @@ The core TWR engine uses only the Python standard library. Database-backed comma
 
 ### `.env` — local configuration
 
-Create a `.env` file at the repository root (it is git-ignored). The dev container's `post-create.sh` reads this file on every container rebuild, so set it up once and it is applied automatically.
+Copy the checked-in `.env.example` template to `.env` at the repository root, then fill in local values. The `.env` file is git-ignored. The dev container's `post-create.sh` reads it on every container rebuild, so set it up once and it is applied automatically.
 
-```dotenv
-# Git identity — used by .devcontainer/post-create.sh to run
-# `git config --global user.name` and `git config --global user.email`
-GITHUB_NAME=Your Name
-GITHUB_EMAIL=your-id+handle@users.noreply.github.com
-
-# Database — Neon/PostgreSQL connection string (see Database Migrations section)
-DATABASE_URL=postgresql://USER:PASSWORD@HOST/neondb?sslmode=require&channel_binding=require
+```bash
+cp .env.example .env
 ```
 
 | Key | Required by | Purpose |
@@ -235,7 +279,7 @@ sqitch --version
 
 ### Configure the database URL
 
-Keep connection strings out of Git. Add your Neon connection string to the ignored local `.env` file (see the [`.env` reference](#env--local-configuration) in the Development Environment section for the full template).
+Keep connection strings out of Git. Add your Neon connection string to the ignored local `.env` file copied from `.env.example` (see the [`.env` reference](#env--local-configuration) in the Development Environment section for the full template).
 
 Load it from the repository root without printing the secret, then convert the PostgreSQL URL to Sqitch's `db:pg:` target URI:
 

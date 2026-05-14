@@ -8,7 +8,15 @@ from datetime import date
 from decimal import Decimal
 from typing import Any, Protocol
 
-from portfolio_engine.models import CashFlow, NavSnapshot
+from portfolio_engine.models import (
+    AccountRef,
+    CashFlow,
+    NavSnapshot,
+    PortfolioCashFlow,
+    PortfolioDailyInput,
+    PortfolioSummary,
+    TransferBridge,
+)
 
 
 class DatabaseConfigurationError(RuntimeError):
@@ -126,6 +134,199 @@ class SuperFolioDatabase:
             (ingestion_run_id, _jsonb(records)),
         )
         return _bulk_summary_from_row(row)
+
+    def create_portfolio(self, *, name: str, reporting_currency: str) -> str:
+        row = self._fetch_one(
+            "SELECT public.create_portfolio(%s, %s)",
+            (name, reporting_currency),
+        )
+        return str(row[0])
+
+    def attach_portfolio_account(
+        self,
+        *,
+        portfolio_name: str,
+        brokerage_code: str,
+        account_external_id: str,
+    ) -> str:
+        row = self._fetch_one(
+            "SELECT public.attach_portfolio_account(%s, %s, %s)",
+            (portfolio_name, brokerage_code, account_external_id),
+        )
+        return str(row[0])
+
+    def create_portfolio_transfer_bridge(
+        self,
+        *,
+        portfolio_name: str,
+        source_brokerage_code: str,
+        source_account_external_id: str,
+        destination_brokerage_code: str,
+        destination_account_external_id: str,
+        departure_date: date,
+        arrival_date: date,
+        value: Decimal,
+        currency: str,
+        note: str | None,
+    ) -> str:
+        row = self._fetch_one(
+            """
+            SELECT public.create_portfolio_transfer_bridge(
+                %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+            )
+            """,
+            (
+                portfolio_name,
+                source_brokerage_code,
+                source_account_external_id,
+                destination_brokerage_code,
+                destination_account_external_id,
+                departure_date,
+                arrival_date,
+                value,
+                currency,
+                note,
+            ),
+        )
+        return str(row[0])
+
+    def list_portfolios(self) -> list[PortfolioSummary]:
+        rows = self._fetch_all(
+            """
+            SELECT name, reporting_currency, is_active
+            FROM public.portfolios
+            ORDER BY name
+            """,
+            (),
+        )
+        return [
+            PortfolioSummary(
+                name=str(row[0]),
+                reporting_currency=str(row[1]),
+                is_active=bool(row[2]),
+            )
+            for row in rows
+        ]
+
+    def fetch_portfolio_accounts(self, portfolio_name: str) -> list[AccountRef]:
+        rows = self._fetch_all(
+            """
+            SELECT b.code, a.external_id, a.base_currency, a.display_name
+            FROM public.portfolio_accounts pa
+            JOIN public.portfolios p ON p.id = pa.portfolio_id
+            JOIN public.accounts a ON a.id = pa.account_id
+            JOIN public.brokerages b ON b.id = a.brokerage_id
+            WHERE p.name = %s
+            ORDER BY b.code, a.external_id
+            """,
+            (portfolio_name,),
+        )
+        return [
+            AccountRef(
+                brokerage_code=str(row[0]),
+                external_id=str(row[1]),
+                base_currency=str(row[2]),
+                display_name=None if row[3] is None else str(row[3]),
+            )
+            for row in rows
+        ]
+
+    def fetch_portfolio_nav_inputs(
+        self,
+        *,
+        portfolio_name: str,
+        start_date: date | None = None,
+        end_date: date | None = None,
+    ) -> list[PortfolioDailyInput]:
+        rows = self._fetch_all(
+            """
+            SELECT b.code, a.external_id, a.base_currency, a.display_name,
+                   d.snapshot_date, d.nav_base, d.base_currency
+            FROM public.portfolio_accounts pa
+            JOIN public.portfolios p ON p.id = pa.portfolio_id
+            JOIN public.accounts a ON a.id = pa.account_id
+            JOIN public.brokerages b ON b.id = a.brokerage_id
+            JOIN public.daily_nav_snapshots d ON d.account_id = a.id
+            WHERE p.name = %s
+              AND (%s::date IS NULL OR d.snapshot_date >= %s::date)
+              AND (%s::date IS NULL OR d.snapshot_date <= %s::date)
+            ORDER BY d.snapshot_date, b.code, a.external_id
+            """,
+            (portfolio_name, start_date, start_date, end_date, end_date),
+        )
+        return [
+            PortfolioDailyInput(
+                account=AccountRef(str(row[0]), str(row[1]), str(row[2]), row[3]),
+                report_date=row[4],
+                nav_base=Decimal(row[5]),
+                nav_currency=str(row[6]),
+            )
+            for row in rows
+        ]
+
+    def fetch_portfolio_cash_flows(
+        self,
+        *,
+        portfolio_name: str,
+        start_date: date | None = None,
+        end_date: date | None = None,
+    ) -> list[PortfolioCashFlow]:
+        rows = self._fetch_all(
+            """
+            SELECT b.code, a.external_id, a.base_currency, a.display_name,
+                   c.flow_date, c.amount_base
+            FROM public.portfolio_accounts pa
+            JOIN public.portfolios p ON p.id = pa.portfolio_id
+            JOIN public.accounts a ON a.id = pa.account_id
+            JOIN public.brokerages b ON b.id = a.brokerage_id
+            JOIN public.cash_flows c ON c.account_id = a.id
+            WHERE p.name = %s
+              AND c.cash_flow_type = %s
+              AND (%s::date IS NULL OR c.flow_date >= %s::date)
+              AND (%s::date IS NULL OR c.flow_date <= %s::date)
+            ORDER BY c.flow_date, b.code, a.external_id
+            """,
+            (portfolio_name, "Deposits/Withdrawals", start_date, start_date, end_date, end_date),
+        )
+        return [
+            PortfolioCashFlow(
+                account=AccountRef(str(row[0]), str(row[1]), str(row[2]), row[3]),
+                effective_date=row[4],
+                amount_base=Decimal(row[5]),
+                base_currency=str(row[2]),
+            )
+            for row in rows
+        ]
+
+    def fetch_portfolio_transfer_bridges(self, portfolio_name: str) -> list[TransferBridge]:
+        rows = self._fetch_all(
+            """
+            SELECT sb.code, sa.external_id, sa.base_currency, sa.display_name,
+                   db.code, da.external_id, da.base_currency, da.display_name,
+                   t.departure_date, t.arrival_date, t.value, t.currency, t.note
+            FROM public.portfolio_transfer_bridges t
+            JOIN public.portfolios p ON p.id = t.portfolio_id
+            JOIN public.accounts sa ON sa.id = t.source_account_id
+            JOIN public.brokerages sb ON sb.id = sa.brokerage_id
+            JOIN public.accounts da ON da.id = t.destination_account_id
+            JOIN public.brokerages db ON db.id = da.brokerage_id
+            WHERE p.name = %s
+            ORDER BY t.departure_date, t.arrival_date
+            """,
+            (portfolio_name,),
+        )
+        return [
+            TransferBridge(
+                source_account=AccountRef(str(row[0]), str(row[1]), str(row[2]), row[3]),
+                destination_account=AccountRef(str(row[4]), str(row[5]), str(row[6]), row[7]),
+                departure_date=row[8],
+                arrival_date=row[9],
+                value=Decimal(row[10]),
+                currency=str(row[11]),
+                note=row[12],
+            )
+            for row in rows
+        ]
 
     def fetch_nav_snapshots(
         self,
