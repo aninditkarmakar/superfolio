@@ -676,7 +676,10 @@ class DatabaseAdapterTests(unittest.TestCase):
             ],
         )
         sql, params = connection.cursor_instance.executed[0]
-        self.assertIn("portfolio_accounts", sql)
+        self.assertIn("public.portfolio_accounts", sql)
+        self.assertIn("public.portfolios", sql)
+        self.assertIn("public.accounts", sql)
+        self.assertIn("public.brokerages", sql)
         self.assertNotIn("a.is_active = true", sql)
         self.assertEqual(params, ("All Accounts",))
 
@@ -710,7 +713,8 @@ class DatabaseAdapterTests(unittest.TestCase):
         self.assertEqual(connection.commit_count, 1)
         self.assertEqual(connection.rollback_count, 0)
         sql, params = connection.cursor_instance.executed[0]
-        self.assertIn("daily_nav_snapshots", sql)
+        self.assertIn("public.portfolio_accounts", sql)
+        self.assertIn("public.daily_nav_snapshots", sql)
         self.assertEqual(params, ("All Accounts", start, start, end, end))
 
     def test_fetch_portfolio_cash_flows_maps_rows(self) -> None:
@@ -743,7 +747,8 @@ class DatabaseAdapterTests(unittest.TestCase):
         self.assertEqual(connection.commit_count, 1)
         self.assertEqual(connection.rollback_count, 0)
         sql, params = connection.cursor_instance.executed[0]
-        self.assertIn("cash_flows", sql)
+        self.assertIn("public.portfolio_accounts", sql)
+        self.assertIn("public.cash_flows", sql)
         self.assertIn("c.cash_flow_type = %s", sql)
         self.assertEqual(params, ("All Accounts", "Deposits/Withdrawals", start, start, end, end))
 
@@ -778,7 +783,9 @@ class DatabaseAdapterTests(unittest.TestCase):
         self.assertEqual(connection.commit_count, 1)
         self.assertEqual(connection.rollback_count, 0)
         sql, params = connection.cursor_instance.executed[0]
-        self.assertIn("portfolio_transfer_bridges", sql)
+        self.assertIn("public.portfolio_transfer_bridges", sql)
+        self.assertIn("public.portfolios", sql)
+        self.assertIn("public.accounts", sql)
         self.assertEqual(params, ("All Accounts",))
 
 

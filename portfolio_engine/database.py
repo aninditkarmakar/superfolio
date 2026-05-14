@@ -194,7 +194,7 @@ class SuperFolioDatabase:
         rows = self._fetch_all(
             """
             SELECT name, reporting_currency, is_active
-            FROM portfolios
+            FROM public.portfolios
             ORDER BY name
             """,
             (),
@@ -212,10 +212,10 @@ class SuperFolioDatabase:
         rows = self._fetch_all(
             """
             SELECT b.code, a.external_id, a.base_currency, a.display_name
-            FROM portfolio_accounts pa
-            JOIN portfolios p ON p.id = pa.portfolio_id
-            JOIN accounts a ON a.id = pa.account_id
-            JOIN brokerages b ON b.id = a.brokerage_id
+            FROM public.portfolio_accounts pa
+            JOIN public.portfolios p ON p.id = pa.portfolio_id
+            JOIN public.accounts a ON a.id = pa.account_id
+            JOIN public.brokerages b ON b.id = a.brokerage_id
             WHERE p.name = %s
             ORDER BY b.code, a.external_id
             """,
@@ -242,11 +242,11 @@ class SuperFolioDatabase:
             """
             SELECT b.code, a.external_id, a.base_currency, a.display_name,
                    d.snapshot_date, d.nav_base, d.base_currency
-            FROM portfolio_accounts pa
-            JOIN portfolios p ON p.id = pa.portfolio_id
-            JOIN accounts a ON a.id = pa.account_id
-            JOIN brokerages b ON b.id = a.brokerage_id
-            JOIN daily_nav_snapshots d ON d.account_id = a.id
+            FROM public.portfolio_accounts pa
+            JOIN public.portfolios p ON p.id = pa.portfolio_id
+            JOIN public.accounts a ON a.id = pa.account_id
+            JOIN public.brokerages b ON b.id = a.brokerage_id
+            JOIN public.daily_nav_snapshots d ON d.account_id = a.id
             WHERE p.name = %s
               AND (%s::date IS NULL OR d.snapshot_date >= %s::date)
               AND (%s::date IS NULL OR d.snapshot_date <= %s::date)
@@ -275,11 +275,11 @@ class SuperFolioDatabase:
             """
             SELECT b.code, a.external_id, a.base_currency, a.display_name,
                    c.flow_date, c.amount_base
-            FROM portfolio_accounts pa
-            JOIN portfolios p ON p.id = pa.portfolio_id
-            JOIN accounts a ON a.id = pa.account_id
-            JOIN brokerages b ON b.id = a.brokerage_id
-            JOIN cash_flows c ON c.account_id = a.id
+            FROM public.portfolio_accounts pa
+            JOIN public.portfolios p ON p.id = pa.portfolio_id
+            JOIN public.accounts a ON a.id = pa.account_id
+            JOIN public.brokerages b ON b.id = a.brokerage_id
+            JOIN public.cash_flows c ON c.account_id = a.id
             WHERE p.name = %s
               AND c.cash_flow_type = %s
               AND (%s::date IS NULL OR c.flow_date >= %s::date)
@@ -304,12 +304,12 @@ class SuperFolioDatabase:
             SELECT sb.code, sa.external_id, sa.base_currency, sa.display_name,
                    db.code, da.external_id, da.base_currency, da.display_name,
                    t.departure_date, t.arrival_date, t.value, t.currency, t.note
-            FROM portfolio_transfer_bridges t
-            JOIN portfolios p ON p.id = t.portfolio_id
-            JOIN accounts sa ON sa.id = t.source_account_id
-            JOIN brokerages sb ON sb.id = sa.brokerage_id
-            JOIN accounts da ON da.id = t.destination_account_id
-            JOIN brokerages db ON db.id = da.brokerage_id
+            FROM public.portfolio_transfer_bridges t
+            JOIN public.portfolios p ON p.id = t.portfolio_id
+            JOIN public.accounts sa ON sa.id = t.source_account_id
+            JOIN public.brokerages sb ON sb.id = sa.brokerage_id
+            JOIN public.accounts da ON da.id = t.destination_account_id
+            JOIN public.brokerages db ON db.id = da.brokerage_id
             WHERE p.name = %s
             ORDER BY t.departure_date, t.arrival_date
             """,
