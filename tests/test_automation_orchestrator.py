@@ -200,7 +200,6 @@ class FakeAutomationDatabase:
         self.completed_ingestion_runs: list = []
         self.cash_bulk_calls: list = []
         self.nav_bulk_calls: list = []
-        self._ingestion_run_counter = 0
 
     def fail_stale_automation_runs(self, *, stale_before, error_message) -> int:
         self._event_log.append("fail_stale")
@@ -244,17 +243,11 @@ class FakeAutomationDatabase:
         return request.automation_job_account_id
 
     def start_ingestion_run(self, request) -> str:
-        self._ingestion_run_counter += 1
-        run_id = f"ingestion-run-{self._ingestion_run_counter}"
-        self.started_ingestion_runs.append({"request": request, "run_id": run_id})
-        return run_id
+        self.started_ingestion_runs.append(request)
+        return "ingestion-run-uuid"
 
     def complete_ingestion_run(self, *, ingestion_run_id: str, status: str, error_message: str | None) -> None:
-        self.completed_ingestion_runs.append({
-            "ingestion_run_id": ingestion_run_id,
-            "status": status,
-            "error_message": error_message,
-        })
+        self.completed_ingestion_runs.append((ingestion_run_id, status, error_message))
 
     def bulk_ingest_cash_flows(self, ingestion_run_id: str, records: list) -> BulkIngestionSummary:
         self.cash_bulk_calls.append({"ingestion_run_id": ingestion_run_id, "records": records})
@@ -1120,9 +1113,9 @@ class AutomationOrchestratorLoadTests(unittest.TestCase):
         child_fin = db.finalized_children[0]
         self.assertEqual(child_fin.status, "succeeded")
         self.assertIsNotNone(child_fin.ingestion_run_id)
-        self.assertEqual(child_fin.ingestion_run_id, "ingestion-run-1")
+        self.assertEqual(child_fin.ingestion_run_id, "ingestion-run-uuid")
         self.assertEqual(len(db.completed_ingestion_runs), 1)
-        self.assertEqual(db.completed_ingestion_runs[0]["status"], "succeeded")
+        self.assertEqual(db.completed_ingestion_runs[0][1], "succeeded")
 
     def test_load_starts_ingestion_run_with_correct_fields(self):
         """load_payload starts an ingestion run with correct brokerage_code, account_external_id, source_type, dates."""
@@ -1132,7 +1125,7 @@ class AutomationOrchestratorLoadTests(unittest.TestCase):
         self._run(request, db)
 
         self.assertEqual(len(db.started_ingestion_runs), 1)
-        started = db.started_ingestion_runs[0]["request"]
+        started = db.started_ingestion_runs[0]
         self.assertEqual(started.brokerage_code, "IBKR")
         self.assertEqual(started.account_external_id, "U100")
         self.assertEqual(started.source_type, "FLEX_WEB_SERVICE")
@@ -1154,7 +1147,7 @@ class AutomationOrchestratorLoadTests(unittest.TestCase):
 
         self._run(request, db, adapter=NamedPayloadAdapter())
 
-        started = db.started_ingestion_runs[0]["request"]
+        started = db.started_ingestion_runs[0]
         self.assertEqual(started.source_filename, "report-2024.xml")
 
     def test_load_no_records_makes_no_bulk_calls(self):
@@ -1167,7 +1160,7 @@ class AutomationOrchestratorLoadTests(unittest.TestCase):
         self.assertEqual(len(db.cash_bulk_calls), 0)
         self.assertEqual(len(db.nav_bulk_calls), 0)
         self.assertEqual(result.status, "succeeded")
-        self.assertEqual(db.completed_ingestion_runs[0]["status"], "succeeded")
+        self.assertEqual(db.completed_ingestion_runs[0][1], "succeeded")
 
     def test_load_child_summary_has_record_counts(self):
         """Finalized child summary must have record_counts key."""
@@ -1410,26 +1403,38 @@ class AutomationLoadPartialTests(unittest.TestCase):
             record_results=[],
         )
 
-        original_bulk = db.bulk_ingest_cash_flows
-
         def partial_bulk(ingestion_run_id, records):
             db.cash_bulk_calls.append({"ingestion_run_id": ingestion_run_id, "records": records})
             return partial_summary
 
         db.bulk_ingest_cash_flows = partial_bulk  # type: ignore
 
-        # Use XML that actually has cash flow records to trigger a bulk call.
-        # Since FakeAdapter returns empty XML with no records, we need an adapter
-        # that returns XML with a parseable cash flow. Because the FakeAdapter
-        # returns empty XML (no records), the bulk call won't happen.
-        # Instead, test via _derive_ingestion_status directly (done in DeriveIngestionStatusTests).
-        # Here we test end-to-end with a stub that returns the partial summary:
+        # Use an adapter that returns XML with one CashTransaction for U100
+        # within the requested date range so bulk_ingest_cash_flows is called.
+        _CASH_XML = (
+            '<FlexQueryResponse>'
+            '<CashTransaction accountId="U100" reportDate="20240115"'
+            ' dateTime="20240115;120000" currency="USD" amount="100.00"'
+            ' fxRateToBase="1" type="Deposits/Withdrawals" transactionID="CF1" />'
+            '</FlexQueryResponse>'
+        )
 
-        result = self._run(request, db)
+        class CashFlowAdapter(FakeAdapter):
+            def fetch_payload(self, account, req, config):
+                from portfolio_engine.automation.types import BrokerPayload
+                return BrokerPayload(xml_text=_CASH_XML, source_name="synthetic.xml")
 
-        # With empty XML (no records), child should be succeeded (no partial conditions)
-        # The partial scenario is covered by DeriveIngestionStatusTests unit tests.
-        self.assertIn(result.status, ("succeeded", "partially_succeeded", "failed"))
+        result = self._run(request, db, adapter=CashFlowAdapter())
+
+        self.assertEqual(result.status, "partially_succeeded")
+        self.assertEqual(len(db.finalized_children), 1)
+        child_fin = db.finalized_children[0]
+        self.assertEqual(child_fin.status, "partially_succeeded")
+        self.assertEqual(child_fin.error_message, "skipped accounts or conflicts require review")
+        self.assertEqual(len(db.finalized_jobs), 1)
+        self.assertEqual(db.finalized_jobs[0].status, "partially_succeeded")
+        self.assertEqual(len(db.completed_ingestion_runs), 1)
+        self.assertEqual(db.completed_ingestion_runs[0][1], "partially_succeeded")
 
 
 if __name__ == "__main__":
