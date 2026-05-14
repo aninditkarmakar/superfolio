@@ -64,8 +64,15 @@ Key fields:
 - `created_at timestamptz not null default now()`
 - `updated_at timestamptz not null default now()`
 
+Important constraints:
+
+- `UNIQUE (brokerage_id, integration_key, name)`.
+- `name` is non-blank and has a conservative maximum length.
+
 Connection names are non-secret labels for humans and future UI surfaces. They
 must not contain tokens, account numbers, query ids, or other sensitive values.
+The management CLI warns or rejects obvious token/query/account-number patterns,
+but operators remain responsible for treating labels as non-secret.
 
 ### Integration connection credentials
 
@@ -91,6 +98,21 @@ automation or management code path that needs it. PostgreSQL stores ciphertext
 and metadata only. Query ids are treated as sensitive because they can function
 as broker data-access handles.
 
+Important constraints:
+
+- At most one active credential row may exist for a connection and credential
+  name: `UNIQUE (connection_id, credential_name) WHERE is_active = true`.
+- `credential_name` is a non-secret key chosen from adapter-defined names such
+  as `flex_token` or `feed:<feed_key>:query_id`.
+- Credential rotation inserts a new row and atomically marks the old active row
+  for the same `(connection_id, credential_name)` as `is_active=false` with
+  `rotated_at=now()`. Rotation does not update ciphertext in place.
+
+Master-key rotation is a separate management operation. The CLI decrypts active
+credential rows with the old `SUPERFOLIO_CREDENTIAL_MASTER_KEY`, re-encrypts
+them with the new master key and key id, verifies they can be read, and only
+then may the deployed environment secret be changed.
+
 ### Integration feeds
 
 An integration feed represents a data request under a connection. For IBKR Flex
@@ -108,15 +130,22 @@ Key fields:
 - `created_at timestamptz not null default now()`
 - `updated_at timestamptz not null default now()`
 
-The first implementation may store a feed's sensitive query id as a credential
-row with a name such as `feed:<feed_key>:query_id`, or use a dedicated encrypted
-feed-secret table if that proves clearer during planning. The important design
-boundary is that query ids are not stored in plaintext and feed rows remain safe
-to display.
+Important constraints:
+
+- `UNIQUE (connection_id, feed_key)`.
+- `feed_key` is non-blank, normalized, and must not contain `:` because feed
+  query-id credentials use `feed:<feed_key>:query_id` as their credential name.
+
+The first implementation stores a feed's sensitive query id as an encrypted
+credential row attached to the same connection, with credential name
+`feed:<feed_key>:query_id`. A dedicated feed-secret table is not part of this
+design.
 
 Feeds do not declare record categories such as cash flows or NAV snapshots.
 Adapters fetch source payloads, and the existing parsing/ingestion layer
-discovers supported records.
+discovers supported records. Feed order has no semantic meaning for investment
+results. Implementations run enabled feeds in stable `feed_key` order so
+inserted-versus-duplicate summaries are reproducible.
 
 ### Account assignment
 
@@ -132,10 +161,28 @@ Key fields:
 - `created_at timestamptz not null default now()`
 - `updated_at timestamptz not null default now()`
 
+This table intentionally stores one current assignment row per account and
+updates it in place when the account changes connection. Assignment history is
+not required for the first implementation; historical automation runs preserve
+the connection actually used by snapshotting `connection_id` onto
+`automation_job_accounts`.
+
+Assignment validation must reject cross-brokerage mappings: the assigned
+account's `brokerage_id` must match the connection's `brokerage_id`. An active
+assignment also requires `integration_connections.is_active = true`; inactive
+connections are treated as missing automation connectivity.
+
 An account with no active assignment is still a valid registered account, but it
 cannot be fetched automatically. During automation, that account becomes a
 child-level failure with `error_category="missing_integration_connection"` while
 other accounts continue.
+
+### Automation child connection snapshot
+
+`automation_job_accounts` gains a nullable `connection_id` reference to
+`integration_connections(id)`. It is populated when the child row is created for
+accounts with an active assignment. It remains null for missing-assignment fast
+failures. This makes historical jobs stable if account assignments change later.
 
 ## Orchestration flow
 
@@ -147,11 +194,19 @@ The manual trigger shape remains portfolio-oriented or account-oriented:
 Resolution then enriches each account with its active integration connection.
 The user does not normally select a connection when triggering a run.
 
+The target-resolution database boundary returns account rows plus a nullable
+`connection_id`. The implementation replaces the current target-resolution
+functions with one connection-aware resolver that handles both portfolio and
+accounts targets. The resolver returns target accounts even when the assignment
+is missing or inactive so the orchestrator can create child rows and record
+explicit child-level failures.
+
 Execution proceeds as follows:
 
 1. Validate the request and create the parent automation job as before.
 2. Resolve target accounts.
-3. Insert `automation_job_accounts` child rows for all resolved accounts.
+3. Insert `automation_job_accounts` child rows for all resolved accounts,
+   snapshotting nullable `connection_id` on each child row.
 4. Mark accounts with no active connection assignment as failed with
    `missing_integration_connection`.
 5. Group remaining accounts by integration connection.
@@ -167,6 +222,40 @@ Execution proceeds as follows:
 Connection-level failures must not stop other connections in the same job. For
 example, if a portfolio includes accounts under two IBKR logins and one token is
 invalid, accounts assigned to the other login should still run.
+
+Dry-run follows the same target resolution, credential decryption, connection
+preflight, feed fetch, parse, and per-account filtering path as load. It skips
+load-overlap checks, never creates `ingestion_runs`, and never writes normalized
+facts. A dry-run child succeeds when all attempted feeds complete without
+fetch/parse errors, even if zero supported records match that account.
+
+Fast-fail paths such as missing assignment, missing credential, credential
+decryption failure, and connection preflight failure may finalize child rows
+directly from `pending` to `failed`; they do not need to mark the child
+`running` first.
+
+### Multi-feed child aggregation
+
+A connection may have multiple enabled feeds. The orchestrator collapses those
+feed outcomes into one `automation_job_accounts` status per requested account:
+
+- `succeeded`: all attempted feeds completed without fetch/parse errors for
+  that account, even if no supported records matched.
+- `partially_succeeded`: at least one feed completed successfully for the
+  account and at least one feed failed, or ingestion reported skipped/conflict
+  conditions after one or more successful feeds.
+- `failed`: no feed completed successfully for the account and at least one feed
+  failed, or setup/preflight errors prevented all feed attempts for the account.
+
+Record counts are summed across successful parsed feeds. Child summaries include
+a non-secret `feed_results` array with feed key/display name, status, error
+category when applicable, and per-feed record counts. When multiple feeds fail,
+the child-level `error_category` uses the first failing feed in stable `feed_key`
+order unless a higher-priority setup category applies.
+
+Parent `error_message` remains null for mixed child-level outcomes. Detailed
+connection/feed failures live on child rows and summaries, while the parent
+summary aggregates counts and statuses.
 
 ## Adapter boundary
 
@@ -193,22 +282,73 @@ For IBKR Flex Web Service:
 Until the IBKR fetch follow-up is implemented, the adapter may continue raising
 `NotImplementedError` after validating connection/feed shape.
 
+The adapter protocol uses dataclasses with this shape:
+
+```python
+@dataclass(frozen=True)
+class SecretValue:
+    """Redacted wrapper around decrypted secret material."""
+    value: str
+
+    def reveal(self) -> str: ...
+    def __repr__(self) -> str: return "<redacted>"
+    def __str__(self) -> str: return "<redacted>"
+
+
+@dataclass(frozen=True)
+class IntegrationConnectionContext:
+    connection_id: str
+    integration_key: str
+    brokerage_code: str
+    name: str
+    credentials: Mapping[str, SecretValue]
+
+
+@dataclass(frozen=True)
+class IntegrationFeedContext:
+    feed_id: str
+    feed_key: str
+    display_name: str | None
+    secrets: Mapping[str, SecretValue]
+
+
+class BrokerAdapter(Protocol):
+    def preflight_connection(
+        self,
+        connection: IntegrationConnectionContext,
+        feeds: tuple[IntegrationFeedContext, ...],
+    ) -> None: ...
+
+    def fetch_feed_payload(
+        self,
+        connection: IntegrationConnectionContext,
+        feed: IntegrationFeedContext,
+        request: AutomationRunRequest,
+    ) -> BrokerPayload: ...
+```
+
+`preflight_connection` validates decrypted credential presence and shape for one
+connection and its enabled feeds. Missing credential rows and decryption failures
+are detected before the adapter receives contexts and are mapped to their
+specific error categories. Broker-specific preflight errors raised by the adapter
+map to `connection_preflight_failed`.
+
 ## Load overlap blocking
 
-Overlap protection remains account/date based but must include connection
-context. A pending or running load blocks another load only when all of these
-match:
+Overlap protection remains account/date based. A pending or running load blocks
+another load only when all of these match:
 
-- same integration key;
-- same connection id;
 - same account id;
 - intersecting inclusive requested date ranges;
+- mode is `load`;
 - active parent and child status are `pending` or `running`.
 
-Including connection id prevents different IBKR logins from blocking each other
-for unrelated account assignments. The current automation job id still must be
-excluded from the overlap query because parent and child rows are created before
-per-account execution.
+Connection id is intentionally not part of the overlap discriminator. The
+normalized data owner is `account_id`; if an account is reassigned while a load
+is pending or running, a second overlapping load for the same account/date range
+must still be blocked. The current automation job id still must be excluded from
+the overlap query because parent and child rows are created before per-account
+execution.
 
 ## CLI and workflow
 
@@ -226,7 +366,7 @@ trigger inputs:
 They do not require an IBKR login/connection selector for normal use. Connection
 choice comes from account assignments.
 
-New management CLIs should support:
+New management CLIs support:
 
 - creating/listing/disabling integration connections;
 - setting or rotating connection credentials;
@@ -243,26 +383,56 @@ operation. It needs:
 `SUPERFOLIO_CREDENTIAL_MASTER_KEY` is the canonical local `.env` and GitHub
 Actions secret name for the credential encryption master key.
 
+The `ibkr_flex_ws` static integration config no longer lists
+`IBKR_FLEX_TOKEN` or `IBKR_FLEX_QUERY_ID` as required environment keys. Static
+runtime env validation requires only generic runtime secrets such as
+`DATABASE_URL` and `SUPERFOLIO_CREDENTIAL_MASTER_KEY`; broker token/query
+validation moves to credential-aware connection/feed preflight.
+
+Management CLIs also include:
+
+- bulk assignment by comma-separated account ids;
+- bulk assignment by portfolio when all selected accounts belong to one
+  connection;
+- assignment validation for a portfolio or account list, reporting accounts with
+  no active connection assignment or inactive connections before automation is
+  triggered.
+
 ## Security and privacy
 
 - Plaintext credentials and query ids must never be stored in PostgreSQL.
 - Plaintext credentials and query ids must never be written to logs,
   automation summaries, workflow output, or exception messages.
-- Encryption is performed in Python before persistence. Decryption occurs only
-  inside credential-aware management and automation code paths.
-- The encryption helper must support key identifiers or versions so future key
-  rotation can be introduced without rewriting account assignments.
-- Connection and feed display names are treated as non-secret but should be
+- Encryption uses Python app-level authenticated encryption with
+  `cryptography.fernet.Fernet`.
+- `SUPERFOLIO_CREDENTIAL_MASTER_KEY` must be a Fernet-compatible URL-safe
+  base64-encoded 32-byte key. The helper validates this at startup and raises a
+  sanitized configuration error if the key is missing or malformed.
+- Decryption authentication failures are surfaced as sanitized
+  `credential_decryption_failed` errors, not broker fetch errors.
+- Decryption occurs only inside credential-aware management and automation code
+  paths. Decrypted values are wrapped in a `SecretValue` type whose string and
+  repr forms are redacted; plaintext is exposed only through an explicit method
+  at the adapter boundary.
+- The encryption helper supports `encryption_key_id` and `encryption_version` so
+  future key rotation can be introduced without rewriting account assignments.
+- Connection and feed display names are treated as non-secret but must be
   documented as labels only, not a place to paste account numbers or tokens.
 - Automation summaries may include non-secret connection/feed names or ids only
   when useful for diagnosis. They must not include raw XML, tokens, query ids,
   account values, NAV values, cash amounts, or full broker responses.
+- The sanitizer must redact values associated with `query_id`, `flex_query_id`,
+  `credential`, `ciphertext`, `master_key`, `token`, `password`, `secret`, and
+  `api_key` labels before any message is persisted or printed.
 
 ## Error handling
 
 New child-level error categories:
 
 - `missing_integration_connection`
+- `missing_connection_credential`
+- `missing_feed_secret`
+- `credential_decryption_failed`
 - `connection_preflight_failed`
 - `feed_fetch_failed`
 - `feed_parse_failed`
@@ -278,20 +448,26 @@ Parent status rules remain unchanged:
 
 ## Testing expectations
 
-The implementation should include focused tests for:
+The implementation includes focused tests for:
 
 - encrypted credential round trips without plaintext persistence;
+- encrypted credential tamper detection;
 - missing master key errors;
+- malformed master key errors;
 - credential redaction in errors/loggable messages;
 - creating and rotating credentials;
+- master-key rotation workflow;
 - multiple feeds under one connection;
 - explicit account-to-connection assignment;
+- rejecting cross-brokerage account assignments;
 - account targets spanning multiple connections;
 - portfolio targets spanning multiple connections;
 - missing assignment as child failure;
 - connection preflight failure isolated to that connection's accounts;
+- missing credential/decryption failures isolated to one connection's accounts;
 - all enabled feeds run for a connection;
-- load overlap checks include connection id and exclude the current job id;
+- multi-feed success/failure aggregation;
+- load overlap checks are account/date scoped and exclude the current job id;
 - manual workflow no longer requiring per-login IBKR token/query secrets.
 
 ## Migration from current automation infrastructure
@@ -306,9 +482,16 @@ portfolio/account target semantics:
 4. Update target resolution to attach connection context or fail missing
    assignments at child level.
 5. Refactor orchestration to group by connection and run feeds.
-6. Update overlap detection to include connection id.
+6. Keep overlap detection account/date scoped while snapshotting connection id
+   on child rows for audit.
 7. Update workflow/docs to require the master encryption key instead of
    per-login IBKR secrets.
 
 Existing accounts will need explicit assignments before automated fetch can run
-successfully. That setup should be handled by the new management CLI.
+successfully. That setup is handled by the new management CLI.
+
+Before removing old per-login IBKR secrets or relying on the new workflow path,
+run the management CLI assignment validator for each portfolio/account group you
+plan to automate. Cutover should proceed only when every expected account has an
+active same-brokerage connection assignment, each connection has required active
+credentials, and each connection has at least one enabled feed.
