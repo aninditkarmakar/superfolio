@@ -10,7 +10,7 @@ from __future__ import annotations
 import os
 
 from portfolio_engine.database import AutomationAccountTarget
-from portfolio_engine.automation.types import AutomationRunRequest, BrokerPayload, IntegrationConfig
+from portfolio_engine.automation.types import AutomationRunRequest, BrokerAdapter, BrokerPayload, IntegrationConfig
 
 
 class IbkrFlexWebServiceAdapter:
@@ -47,7 +47,7 @@ class IbkrFlexWebServiceAdapter:
         )
 
 
-def get_adapter(adapter_key: str) -> IbkrFlexWebServiceAdapter:
+def get_adapter(adapter_key: str) -> BrokerAdapter:
     """Return the adapter instance for the given adapter key.
 
     Normalizes whitespace and case before lookup. Raises ValueError for
