@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pathlib import Path
+from tempfile import TemporaryDirectory
 import unittest
 
 from portfolio_engine.automation.config import load_integration_config
@@ -32,6 +34,68 @@ class AutomationConfigTests(unittest.TestCase):
         config = load_integration_config("ibkr_flex_ws")
         self.assertIsInstance(config.required_env_keys, tuple)
         self.assertIn("DATABASE_URL", config.required_env_keys)
+
+    def test_missing_required_field_fails_with_context(self) -> None:
+        path = self._write_config(
+            """
+integrations:
+  test:
+    brokerage_code: IBKR
+    source_type: FLEX_WEB_SERVICE
+    adapter_key: ibkr_flex_ws
+    supported_modes:
+      - dry-run
+    stale_running_timeout_minutes: 120
+"""
+        )
+
+        with self.assertRaisesRegex(ValueError, "integration 'test' missing required field: required_env_keys"):
+            load_integration_config("test", path=path)
+
+    def test_null_list_field_fails_with_context(self) -> None:
+        path = self._write_config(
+            """
+integrations:
+  test:
+    brokerage_code: IBKR
+    source_type: FLEX_WEB_SERVICE
+    adapter_key: ibkr_flex_ws
+    supported_modes:
+    required_env_keys:
+      - DATABASE_URL
+    stale_running_timeout_minutes: 120
+"""
+        )
+
+        with self.assertRaisesRegex(ValueError, "integration 'test' field supported_modes must be a list"):
+            load_integration_config("test", path=path)
+
+    def test_invalid_supported_mode_fails(self) -> None:
+        path = self._write_config(
+            """
+integrations:
+  test:
+    brokerage_code: IBKR
+    source_type: FLEX_WEB_SERVICE
+    adapter_key: ibkr_flex_ws
+    supported_modes:
+      - dry-run
+      - bogus
+    required_env_keys:
+      - DATABASE_URL
+    stale_running_timeout_minutes: 120
+"""
+        )
+
+        with self.assertRaisesRegex(ValueError, "integration 'test' has unsupported modes: bogus"):
+            load_integration_config("test", path=path)
+
+    def _write_config(self, contents: str) -> Path:
+        directory = TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        path = Path(directory.name) / "integrations.yaml"
+        path.write_text(contents, encoding="utf-8")
+        return path
 
 
 if __name__ == "__main__":
