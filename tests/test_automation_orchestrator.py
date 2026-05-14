@@ -1437,5 +1437,195 @@ class AutomationLoadPartialTests(unittest.TestCase):
         self.assertEqual(db.completed_ingestion_runs[0][1], "partially_succeeded")
 
 
+class AutomationLoadIngestionRunCleanupTests(unittest.TestCase):
+    """Tests for Task 13 fix: complete ingestion run as failed on bulk ingest exception."""
+
+    _CASH_XML = (
+        '<FlexQueryResponse>'
+        '<CashTransaction accountId="U100" reportDate="20240115"'
+        ' dateTime="20240115;120000" currency="USD" amount="100.00"'
+        ' fxRateToBase="1" type="Deposits/Withdrawals" transactionID="CF1" />'
+        '</FlexQueryResponse>'
+    )
+
+    def _run(self, request, db, adapter=None):
+        from portfolio_engine.automation.orchestrator import run_automation
+        if adapter is None:
+            adapter = FakeAdapter()
+        return run_automation(request, database=db, adapter=adapter)
+
+    def _make_request(self, **kwargs):
+        from portfolio_engine.automation.types import AutomationRunRequest
+        defaults = dict(
+            target_type="accounts",
+            integration_key="ibkr_flex_ws",
+            mode="load",
+            requested_start_date=date(2024, 1, 1),
+            requested_end_date=date(2024, 1, 31),
+            account_external_ids=("U100",),
+        )
+        defaults.update(kwargs)
+        return AutomationRunRequest(**defaults)
+
+    def _make_account_target(self, *, account_id="account-uuid", external_id="U100"):
+        from portfolio_engine.database import AutomationAccountTarget
+        return AutomationAccountTarget(
+            account_id=account_id,
+            brokerage_code="IBKR",
+            account_external_id=external_id,
+            base_currency="USD",
+            display_name="Main",
+        )
+
+    def _make_cash_flow_adapter(self):
+        xml = self._CASH_XML
+
+        class CashFlowAdapter(FakeAdapter):
+            def fetch_payload(self, account, req, config):
+                from portfolio_engine.automation.types import BrokerPayload
+                return BrokerPayload(xml_text=xml, source_name="synthetic.xml")
+
+        return CashFlowAdapter()
+
+    def test_bulk_ingest_exception_completes_ingestion_run_as_failed(self):
+        """When bulk_ingest_cash_flows raises after start_ingestion_run, ingestion run must be completed as failed."""
+        request = self._make_request()
+        db = FakeAutomationDatabase()
+        db.account_targets = [self._make_account_target()]
+
+        def raising_bulk(ingestion_run_id, records):
+            raise RuntimeError("bulk insert failed")
+
+        db.bulk_ingest_cash_flows = raising_bulk  # type: ignore
+
+        result = self._run(request, db, adapter=self._make_cash_flow_adapter())
+
+        self.assertEqual(result.status, "failed")
+        self.assertEqual(len(db.completed_ingestion_runs), 1)
+        run_id, status, _msg = db.completed_ingestion_runs[0]
+        self.assertEqual(run_id, "ingestion-run-uuid")
+        self.assertEqual(status, "failed")
+
+    def test_bulk_ingest_exception_no_uncompleted_ingestion_run(self):
+        """After bulk_ingest_cash_flows raises, no ingestion run must be left open (started but not completed)."""
+        request = self._make_request()
+        db = FakeAutomationDatabase()
+        db.account_targets = [self._make_account_target()]
+
+        def raising_bulk(ingestion_run_id, records):
+            raise RuntimeError("bulk insert failed")
+
+        db.bulk_ingest_cash_flows = raising_bulk  # type: ignore
+
+        self._run(request, db, adapter=self._make_cash_flow_adapter())
+
+        started_ids = {r.account_external_id for r in db.started_ingestion_runs}
+        self.assertEqual(len(db.started_ingestion_runs), len(db.completed_ingestion_runs),
+                         "every started ingestion run must be completed")
+        self.assertGreater(len(db.completed_ingestion_runs), 0)
+
+    def test_bulk_ingest_exception_child_finalized_as_failed(self):
+        """When bulk_ingest raises, the orchestrator child must be finalized as failed."""
+        request = self._make_request()
+        db = FakeAutomationDatabase()
+        db.account_targets = [self._make_account_target()]
+
+        def raising_bulk(ingestion_run_id, records):
+            raise RuntimeError("bulk insert failed")
+
+        db.bulk_ingest_cash_flows = raising_bulk  # type: ignore
+
+        result = self._run(request, db, adapter=self._make_cash_flow_adapter())
+
+        self.assertEqual(result.status, "failed")
+        self.assertEqual(len(db.finalized_children), 1)
+        self.assertEqual(db.finalized_children[0].status, "failed")
+
+    def test_bulk_ingest_exception_error_message_is_sanitized(self):
+        """Error message stored on failed ingestion run must not contain raw secrets."""
+        request = self._make_request()
+        db = FakeAutomationDatabase()
+        db.account_targets = [self._make_account_target()]
+
+        def raising_bulk(ingestion_run_id, records):
+            raise RuntimeError("token=supersecret postgresql://user:pass@host/db")
+
+        db.bulk_ingest_cash_flows = raising_bulk  # type: ignore
+
+        self._run(request, db, adapter=self._make_cash_flow_adapter())
+
+        self.assertEqual(len(db.completed_ingestion_runs), 1)
+        _run_id, _status, msg = db.completed_ingestion_runs[0]
+        self.assertIsNotNone(msg)
+        self.assertNotIn("supersecret", msg or "")
+        self.assertNotIn("postgresql://", msg or "")
+
+    def test_nav_bulk_ingest_exception_completes_ingestion_run_as_failed(self):
+        """When bulk_ingest_daily_nav_snapshots raises, ingestion run must be completed as failed."""
+        nav_xml = (
+            '<FlexQueryResponse>'
+            '<EquitySummaryByReportDateInBase accountId="U100" reportDate="20240115"'
+            ' currency="USD" total="10000.00" cash="0.00" stock="10000.00" />'
+            '</FlexQueryResponse>'
+        )
+        request = self._make_request()
+        db = FakeAutomationDatabase()
+        db.account_targets = [self._make_account_target()]
+
+        def raising_nav_bulk(ingestion_run_id, records):
+            raise RuntimeError("nav bulk insert failed")
+
+        db.bulk_ingest_daily_nav_snapshots = raising_nav_bulk  # type: ignore
+
+        class NavAdapter(FakeAdapter):
+            def fetch_payload(self, account, req, config):
+                from portfolio_engine.automation.types import BrokerPayload
+                return BrokerPayload(xml_text=nav_xml, source_name="nav.xml")
+
+        result = self._run(request, db, adapter=NavAdapter())
+
+        self.assertEqual(result.status, "failed")
+        self.assertEqual(len(db.completed_ingestion_runs), 1)
+        _run_id, status, _msg = db.completed_ingestion_runs[0]
+        self.assertEqual(status, "failed")
+
+    def test_bulk_exception_does_not_affect_second_account(self):
+        """When first account's bulk raises, second account is still processed successfully."""
+        request = self._make_request(account_external_ids=("U100", "U200"))
+        db = FakeAutomationDatabase()
+        db.account_targets = [
+            self._make_account_target(account_id="acct-1", external_id="U100"),
+            self._make_account_target(account_id="acct-2", external_id="U200"),
+        ]
+
+        call_count = [0]
+
+        def sometimes_raising_bulk(ingestion_run_id, records):
+            call_count[0] += 1
+            if call_count[0] == 1:
+                raise RuntimeError("first bulk failed")
+            return BulkIngestionSummary(
+                inserted_count=1,
+                duplicate_count=0,
+                skipped_unknown_account_count=0,
+                skipped_inactive_account_count=0,
+                conflict_count=0,
+                skipped_accounts=[],
+                record_results=[],
+            )
+
+        db.bulk_ingest_cash_flows = sometimes_raising_bulk  # type: ignore
+
+        result = self._run(request, db, adapter=self._make_cash_flow_adapter())
+
+        self.assertEqual(result.status, "partially_succeeded")
+        self.assertEqual(len(db.finalized_children), 2)
+        statuses = {f.automation_job_account_id: f.status for f in db.finalized_children}
+        self.assertEqual(statuses["child-1"], "failed")
+        self.assertEqual(statuses["child-2"], "succeeded")
+        self.assertEqual(len(db.completed_ingestion_runs), 2,
+                         "both ingestion runs must be completed (one failed, one succeeded)")
+
+
 if __name__ == "__main__":
     unittest.main()

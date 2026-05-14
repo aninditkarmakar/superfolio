@@ -4,6 +4,7 @@ from __future__ import annotations
 from datetime import date
 from typing import Any
 
+from portfolio_engine.automation.sanitization import sanitize_error_message
 from portfolio_engine.automation.summary import build_child_summary
 from portfolio_engine.database import BulkIngestionSummary, IngestionRunStart
 from portfolio_engine.ingestion.dry_run import analyze_flex_xml_text_for_ingestion
@@ -67,27 +68,35 @@ def load_payload(
 
     cash_summary = _empty_bulk_summary()
     nav_summary = _empty_bulk_summary()
-    if analysis.cash_flow_records:
-        cash_summary = database.bulk_ingest_cash_flows(
-            ingestion_run_id, list(analysis.cash_flow_records)
-        )
-    if analysis.daily_nav_records:
-        nav_summary = database.bulk_ingest_daily_nav_snapshots(
-            ingestion_run_id, list(analysis.daily_nav_records)
+    try:
+        if analysis.cash_flow_records:
+            cash_summary = database.bulk_ingest_cash_flows(
+                ingestion_run_id, list(analysis.cash_flow_records)
+            )
+        if analysis.daily_nav_records:
+            nav_summary = database.bulk_ingest_daily_nav_snapshots(
+                ingestion_run_id, list(analysis.daily_nav_records)
+            )
+
+        status = _derive_ingestion_status(cash_summary, nav_summary)
+        message: str | None = (
+            "skipped accounts or conflicts require review"
+            if status == "partially_succeeded"
+            else None
         )
 
-    status = _derive_ingestion_status(cash_summary, nav_summary)
-    message: str | None = (
-        "skipped accounts or conflicts require review"
-        if status == "partially_succeeded"
-        else None
-    )
-
-    database.complete_ingestion_run(
-        ingestion_run_id=ingestion_run_id,
-        status=status,
-        error_message=message,
-    )
+        database.complete_ingestion_run(
+            ingestion_run_id=ingestion_run_id,
+            status=status,
+            error_message=message,
+        )
+    except Exception as exc:
+        database.complete_ingestion_run(
+            ingestion_run_id=ingestion_run_id,
+            status="failed",
+            error_message=sanitize_error_message(str(exc)),
+        )
+        raise
 
     child_summary = build_child_summary(
         cash_supported=analysis.cash_flow_count,
