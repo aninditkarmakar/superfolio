@@ -361,13 +361,25 @@ class AutomationOrchestratorValidationTests(unittest.TestCase):
         self.assertLessEqual(stale_before, after_call - expected_delta + timedelta(seconds=5))
 
     def test_valid_request_creates_and_returns_job_id(self):
-        """A valid request (with accounts) must create one parent job and return its id."""
+        """A valid request (with resolved accounts) must create one parent job, add child rows, and return its id."""
+        from portfolio_engine.database import AutomationAccountTarget
         request = self._make_request(account_external_ids=("U100",))
         db = FakeAutomationDatabase()
+        db.account_targets = [
+            AutomationAccountTarget(
+                account_id="account-uuid",
+                brokerage_code="IBKR",
+                account_external_id="U100",
+                base_currency="USD",
+                display_name="Main",
+            )
+        ]
         result = self._run(request, db)
 
         self.assertEqual(result.automation_job_id, "job-uuid")
         self.assertEqual(len(db.created_jobs), 1)
+        self.assertEqual(len(db.added_accounts), 1, "child row must be created for the resolved account")
+        self.assertEqual(result.error_message, "account execution not implemented yet")
 
     def test_valid_request_finalizes_parent_job_as_failed_placeholder(self):
         """Valid request (no validation error) must finalize parent job as failed (placeholder path).
@@ -575,6 +587,36 @@ class AutomationOrchestratorTargetResolutionTests(unittest.TestCase):
         child_account_ids = {req.account_id for _cid, req in db.added_accounts}
         self.assertIn("acct-1", child_account_ids)
         self.assertIn("acct-2", child_account_ids)
+
+    def test_valid_target_resolution_preserves_child_ids(self):
+        """Returned child IDs from add_automation_job_account must appear on result.automation_job_account_ids."""
+        request = self._make_accounts_request(account_external_ids=("U100", "U200"))
+        db = FakeAutomationDatabase()
+        db.account_targets = [
+            self._make_account_target(account_id="acct-1", external_id="U100"),
+            self._make_account_target(account_id="acct-2", external_id="U200"),
+        ]
+
+        result = self._run(request, db)
+
+        self.assertIsNotNone(result.automation_job_account_ids)
+        self.assertIn("child-1", result.automation_job_account_ids)
+        self.assertIn("child-2", result.automation_job_account_ids)
+
+    def test_child_insert_error_finalizes_parent_as_failed_and_reraises(self):
+        """If add_automation_job_account raises, parent is finalized as failed and exception re-raised."""
+        request = self._make_accounts_request()
+        db = FakeAutomationDatabase()
+        db.account_targets = [self._make_account_target()]
+
+        original_exc = RuntimeError("db child insert failed")
+
+        with mock.patch.object(db, "add_automation_job_account", side_effect=original_exc):
+            with self.assertRaises(RuntimeError) as ctx:
+                self._run(request, db)
+            self.assertIs(ctx.exception, original_exc)
+        self.assertEqual(len(db.finalized_jobs), 1)
+        self.assertEqual(db.finalized_jobs[0].status, "failed")
 
 
 if __name__ == "__main__":

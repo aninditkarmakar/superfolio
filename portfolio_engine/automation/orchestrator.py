@@ -19,6 +19,7 @@ class AutomationRunResult:
     status: str
     summary: dict[str, Any]
     error_message: str | None = None
+    automation_job_account_ids: tuple[str, ...] = ()
 
 
 def run_automation(request: AutomationRunRequest, *, database) -> AutomationRunResult:
@@ -78,13 +79,28 @@ def run_automation(request: AutomationRunRequest, *, database) -> AutomationRunR
             error_message=error_message,
         )
 
-    for account in accounts:
-        database.add_automation_job_account(
-            AutomationJobAccountAdd(
+    child_ids: list[str] = []
+    try:
+        for account in accounts:
+            child_id = database.add_automation_job_account(
+                AutomationJobAccountAdd(
+                    automation_job_id=job_id,
+                    account_id=account.account_id,
+                )
+            )
+            child_ids.append(child_id)
+    except Exception as exc:
+        error_message = sanitize_error_message(str(exc))
+        summary = build_parent_summary([], [])
+        database.finalize_automation_job(
+            AutomationJobFinalize(
                 automation_job_id=job_id,
-                account_id=account.account_id,
+                status="failed",
+                summary=summary,
+                error_message=error_message,
             )
         )
+        raise
 
     # Task 12+ will implement the account execution loop.
     summary = build_parent_summary([], [])
@@ -102,6 +118,7 @@ def run_automation(request: AutomationRunRequest, *, database) -> AutomationRunR
         status="failed",
         summary=summary,
         error_message=error_message,
+        automation_job_account_ids=tuple(child_ids),
     )
 
 
