@@ -1036,15 +1036,16 @@ class AutomationDatabaseAdapterTests(unittest.TestCase):
             account_id="account-uuid",
             requested_start_date=date(2024, 1, 1),
             requested_end_date=date(2024, 1, 31),
+            exclude_automation_job_id="job-uuid",
         )
 
         self.assertTrue(result)
         self.assertEqual(connection.commit_count, 1)
         sql, params = connection.cursor_instance.executed[0]
-        self.assertEqual(sql, "SELECT public.has_overlapping_automation_load(%s, %s, %s, %s)")
+        self.assertEqual(sql, "SELECT public.has_overlapping_automation_load(%s, %s, %s, %s, %s)")
         self.assertEqual(
             params,
-            ("ibkr_flex_ws", "account-uuid", date(2024, 1, 1), date(2024, 1, 31)),
+            ("ibkr_flex_ws", "account-uuid", date(2024, 1, 1), date(2024, 1, 31), "job-uuid"),
         )
 
     def test_has_overlapping_automation_load_returns_false_when_no_overlap(self) -> None:
@@ -1056,6 +1057,7 @@ class AutomationDatabaseAdapterTests(unittest.TestCase):
             account_id="account-uuid",
             requested_start_date=date(2024, 2, 1),
             requested_end_date=date(2024, 2, 28),
+            exclude_automation_job_id="job-uuid",
         )
 
         self.assertFalse(result)
@@ -1069,9 +1071,34 @@ class AutomationDatabaseAdapterTests(unittest.TestCase):
             account_id="account-uuid",
             requested_start_date=date(2024, 1, 1),
             requested_end_date=date(2024, 1, 31),
+            exclude_automation_job_id="job-uuid",
         )
 
         self.assertIsInstance(result, bool)
+
+    # ------------------------------------------------------------------
+    # Issue 1 fix: adapter method must accept and pass exclude_automation_job_id
+    # ------------------------------------------------------------------
+
+    def test_has_overlapping_automation_load_passes_exclude_job_id_as_fifth_param(self) -> None:
+        """Adapter must pass exclude_automation_job_id as the 5th SQL parameter."""
+        connection = FakeConnection((False,))
+        database = SuperFolioDatabase(connection)
+
+        database.has_overlapping_automation_load(
+            integration_key="ibkr_flex_ws",
+            account_id="account-uuid",
+            requested_start_date=date(2024, 1, 1),
+            requested_end_date=date(2024, 1, 31),
+            exclude_automation_job_id="exclude-job-uuid",
+        )
+
+        sql, params = connection.cursor_instance.executed[0]
+        self.assertEqual(sql, "SELECT public.has_overlapping_automation_load(%s, %s, %s, %s, %s)")
+        self.assertEqual(
+            params,
+            ("ibkr_flex_ws", "account-uuid", date(2024, 1, 1), date(2024, 1, 31), "exclude-job-uuid"),
+        )
 
 
 if __name__ == "__main__":

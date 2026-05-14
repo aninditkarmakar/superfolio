@@ -386,7 +386,8 @@ CREATE FUNCTION public.has_overlapping_automation_load(
     p_integration_key TEXT,
     p_account_id UUID,
     p_requested_start_date DATE,
-    p_requested_end_date DATE
+    p_requested_end_date DATE,
+    p_exclude_automation_job_id UUID
 )
 RETURNS BOOLEAN
 LANGUAGE sql
@@ -400,6 +401,7 @@ AS $$
           AND j.status IN ('pending', 'running')
           AND ja.account_id = p_account_id
           AND ja.status IN ('pending', 'running')
+          AND j.id <> p_exclude_automation_job_id
           AND daterange(j.requested_start_date, j.requested_end_date, '[]')
               && daterange(p_requested_start_date, p_requested_end_date, '[]')
     );

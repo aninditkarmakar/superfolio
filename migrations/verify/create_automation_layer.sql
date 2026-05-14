@@ -43,6 +43,6 @@ WHERE signature IS NOT NULL;
 SELECT 1 / (count(*) = 1)::int
 FROM (
     VALUES
-        (to_regprocedure('public.has_overlapping_automation_load(text,uuid,date,date)'))
+        (to_regprocedure('public.has_overlapping_automation_load(text,uuid,date,date,uuid)'))
 ) AS functions(signature)
 WHERE signature IS NOT NULL;

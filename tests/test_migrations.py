@@ -315,7 +315,7 @@ class MigrationContractTests(unittest.TestCase):
         sql = (MIGRATIONS_DIR / "revert" / "create_automation_layer.sql").read_text(encoding="utf-8")
 
         self.assertIn(
-            "DROP FUNCTION IF EXISTS public.has_overlapping_automation_load(TEXT, UUID, DATE, DATE);",
+            "DROP FUNCTION IF EXISTS public.has_overlapping_automation_load(TEXT, UUID, DATE, DATE, UUID);",
             sql,
         )
 
@@ -330,7 +330,7 @@ class MigrationContractTests(unittest.TestCase):
         sql = (MIGRATIONS_DIR / "verify" / "create_automation_layer.sql").read_text(encoding="utf-8")
 
         self.assertIn(
-            "to_regprocedure('public.has_overlapping_automation_load(text,uuid,date,date)')",
+            "to_regprocedure('public.has_overlapping_automation_load(text,uuid,date,date,uuid)')",
             sql,
         )
 
@@ -341,6 +341,40 @@ class MigrationContractTests(unittest.TestCase):
         # Should not contain a bare "SELECT 1 WHERE ... IS NOT NULL" for the new function alone
         # (that would be a silent pass on missing function). Must use the raising integer-divide style.
         self.assertIn("1 /", sql)
+
+    # ------------------------------------------------------------------
+    # Issue 1 fix: exclude-self parameter added to has_overlapping_automation_load
+    # ------------------------------------------------------------------
+
+    def test_automation_layer_overlap_function_has_exclude_job_id_parameter(self) -> None:
+        """Deploy SQL must declare p_exclude_automation_job_id UUID parameter."""
+        sql = (MIGRATIONS_DIR / "deploy" / "create_automation_layer.sql").read_text(encoding="utf-8")
+
+        self.assertIn("p_exclude_automation_job_id UUID", sql)
+
+    def test_automation_layer_overlap_function_excludes_current_job(self) -> None:
+        """Deploy SQL WHERE clause must exclude the current job row to prevent self-match."""
+        sql = (MIGRATIONS_DIR / "deploy" / "create_automation_layer.sql").read_text(encoding="utf-8")
+
+        self.assertIn("j.id <> p_exclude_automation_job_id", sql)
+
+    def test_automation_layer_revert_drops_overlap_function_with_five_params(self) -> None:
+        """Revert must drop the updated 5-parameter signature (TEXT, UUID, DATE, DATE, UUID)."""
+        sql = (MIGRATIONS_DIR / "revert" / "create_automation_layer.sql").read_text(encoding="utf-8")
+
+        self.assertIn(
+            "DROP FUNCTION IF EXISTS public.has_overlapping_automation_load(TEXT, UUID, DATE, DATE, UUID);",
+            sql,
+        )
+
+    def test_automation_layer_verify_checks_overlap_function_with_five_param_signature(self) -> None:
+        """Verify to_regprocedure must reference the 5-parameter signature."""
+        sql = (MIGRATIONS_DIR / "verify" / "create_automation_layer.sql").read_text(encoding="utf-8")
+
+        self.assertIn(
+            "to_regprocedure('public.has_overlapping_automation_load(text,uuid,date,date,uuid)')",
+            sql,
+        )
 
 
 if __name__ == "__main__":

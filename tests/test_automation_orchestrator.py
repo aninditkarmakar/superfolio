@@ -283,12 +283,14 @@ class FakeAutomationDatabase:
         account_id: str,
         requested_start_date,
         requested_end_date,
+        exclude_automation_job_id: str,
     ) -> bool:
         self.overlap_check_calls.append({
             "integration_key": integration_key,
             "account_id": account_id,
             "requested_start_date": requested_start_date,
             "requested_end_date": requested_end_date,
+            "exclude_automation_job_id": exclude_automation_job_id,
         })
         return self.overlapping_load
 
@@ -2410,6 +2412,41 @@ class AutomationOrchestratorOverlapTests(unittest.TestCase):
         child_fin = db.finalized_children[0]
         self.assertIsNotNone(child_fin.summary)
         self.assertIn("record_counts", child_fin.summary)
+
+    # ------------------------------------------------------------------
+    # Issue 1 fix: orchestrator must pass exclude_automation_job_id=job_id
+    # ------------------------------------------------------------------
+
+    def test_load_passes_job_id_as_exclude_automation_job_id_to_overlap_check(self):
+        """Orchestrator must pass exclude_automation_job_id matching the current job_id."""
+        request = self._make_load_request()
+        db = self._make_db_with_accounts(self._make_account_target())
+
+        self._run(request, db)
+
+        self.assertEqual(len(db.overlap_check_calls), 1)
+        call = db.overlap_check_calls[0]
+        self.assertIn("exclude_automation_job_id", call)
+        self.assertEqual(call["exclude_automation_job_id"], "job-uuid")
+
+    # ------------------------------------------------------------------
+    # Issue 2 fix: overlapping load child must have error_category=overlapping_load_job
+    # ------------------------------------------------------------------
+
+    def test_overlapping_load_child_summary_has_overlapping_load_job_error_category(self):
+        """Overlap failure child summary error_category must be 'overlapping_load_job', not 'fetch_or_parse_error'."""
+        request = self._make_load_request()
+        db = self._make_db_with_accounts(self._make_account_target())
+        db.overlapping_load = True
+
+        self._run(request, db)
+
+        child_fin = db.finalized_children[0]
+        self.assertIsNotNone(child_fin.summary)
+        summary = child_fin.summary
+        self.assertIn("error_category", summary)
+        self.assertEqual(summary["error_category"], "overlapping_load_job")
+        self.assertNotEqual(summary.get("error_category"), "fetch_or_parse_error")
 
 
 if __name__ == "__main__":

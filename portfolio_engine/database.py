@@ -246,10 +246,11 @@ class SuperFolioDatabase:
         account_id: str,
         requested_start_date: date,
         requested_end_date: date,
+        exclude_automation_job_id: str,
     ) -> bool:
         row = self._fetch_one(
-            "SELECT public.has_overlapping_automation_load(%s, %s, %s, %s)",
-            (integration_key, account_id, requested_start_date, requested_end_date),
+            "SELECT public.has_overlapping_automation_load(%s, %s, %s, %s, %s)",
+            (integration_key, account_id, requested_start_date, requested_end_date, exclude_automation_job_id),
         )
         return bool(row[0])
 

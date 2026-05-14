@@ -2,7 +2,7 @@
 
 BEGIN;
 
-DROP FUNCTION IF EXISTS public.has_overlapping_automation_load(TEXT, UUID, DATE, DATE);
+DROP FUNCTION IF EXISTS public.has_overlapping_automation_load(TEXT, UUID, DATE, DATE, UUID);
 DROP FUNCTION IF EXISTS public.fail_stale_automation_runs(TIMESTAMPTZ, TEXT);
 DROP FUNCTION IF EXISTS public.resolve_automation_account_targets(TEXT, TEXT[]);
 DROP FUNCTION IF EXISTS public.resolve_automation_portfolio_accounts(TEXT, TEXT);

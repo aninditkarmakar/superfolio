@@ -186,6 +186,7 @@ def run_automation(request: AutomationRunRequest, *, database, adapter=None) -> 
                     account_id=account.account_id,
                     requested_start_date=request.requested_start_date,
                     requested_end_date=request.requested_end_date,
+                    exclude_automation_job_id=job_id,
                 ):
                     raise RuntimeError("overlapping_load_job")
                 payload = adapter.fetch_payload(account, request, config)
@@ -201,7 +202,9 @@ def run_automation(request: AutomationRunRequest, *, database, adapter=None) -> 
                 )
             except Exception as exc:
                 error_message = sanitize_error_message(str(exc))
-                failed_child_summary = build_child_summary(error_category="fetch_or_parse_error")
+                is_overlap = isinstance(exc, RuntimeError) and str(exc) == "overlapping_load_job"
+                error_category = "overlapping_load_job" if is_overlap else "fetch_or_parse_error"
+                failed_child_summary = build_child_summary(error_category=error_category)
                 database.finalize_automation_job_account(
                     AutomationJobAccountFinalize(
                         automation_job_account_id=child_id,
