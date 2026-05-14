@@ -9,6 +9,11 @@ from typing import Any
 
 from portfolio_engine.database import (
     AccountRegistration,
+    AutomationAccountTarget,
+    AutomationJobAccountAdd,
+    AutomationJobAccountFinalize,
+    AutomationJobFinalize,
+    AutomationJobStart,
     BulkIngestionSummary,
     DatabaseConfigurationError,
     IngestionRunStart,
@@ -787,6 +792,222 @@ class DatabaseAdapterTests(unittest.TestCase):
         self.assertIn("public.portfolios", sql)
         self.assertIn("public.accounts", sql)
         self.assertEqual(params, ("All Accounts",))
+
+
+class AutomationDatabaseAdapterTests(unittest.TestCase):
+    def test_automation_job_start_is_immutable(self) -> None:
+        request = AutomationJobStart(
+            trigger_type="manual",
+            target_type="accounts",
+            portfolio_id=None,
+            integration_key="ibkr_flex_ws",
+            mode="dry-run",
+            requested_start_date=date(2026, 5, 1),
+            requested_end_date=date(2026, 5, 14),
+        )
+
+        with self.assertRaises(FrozenInstanceError):
+            request.trigger_type = "scheduled"  # type: ignore[misc]
+
+    def test_automation_job_finalize_is_immutable(self) -> None:
+        request = AutomationJobFinalize(
+            automation_job_id="job-uuid",
+            status="succeeded",
+        )
+
+        with self.assertRaises(FrozenInstanceError):
+            request.status = "failed"  # type: ignore[misc]
+
+    def test_automation_account_target_is_immutable(self) -> None:
+        target = AutomationAccountTarget(
+            account_id="account-uuid",
+            brokerage_code="IBKR",
+            account_external_id="U100",
+            base_currency="USD",
+            display_name="Main",
+        )
+
+        with self.assertRaises(FrozenInstanceError):
+            target.account_id = "other-uuid"  # type: ignore[misc]
+
+    def test_create_automation_job_calls_database_function(self) -> None:
+        connection = FakeConnection(("job-uuid",))
+        database = SuperFolioDatabase(connection)
+
+        job_id = database.create_automation_job(
+            AutomationJobStart(
+                trigger_type="manual",
+                target_type="accounts",
+                portfolio_id=None,
+                integration_key="ibkr_flex_ws",
+                mode="dry-run",
+                requested_start_date=date(2026, 5, 1),
+                requested_end_date=date(2026, 5, 14),
+            )
+        )
+
+        self.assertEqual(job_id, "job-uuid")
+        self.assertEqual(connection.commit_count, 1)
+        self.assertEqual(
+            connection.cursor_instance.executed[0],
+            (
+                "SELECT public.create_automation_job(%s, %s, %s, %s, %s, %s, %s)",
+                ("manual", "accounts", None, "ibkr_flex_ws", "dry-run", date(2026, 5, 1), date(2026, 5, 14)),
+            ),
+        )
+
+    def test_finalize_automation_job_passes_summary_json(self) -> None:
+        connection = FakeConnection(("job-uuid",))
+        database = SuperFolioDatabase(connection)
+
+        result = database.finalize_automation_job(
+            AutomationJobFinalize(
+                automation_job_id="job-uuid",
+                status="succeeded",
+                summary={"account_counts": {"total": 1, "succeeded": 1, "partially_succeeded": 0, "failed": 0}},
+                error_message=None,
+            )
+        )
+
+        self.assertEqual(result, "job-uuid")
+        sql, params = connection.cursor_instance.executed[0]
+        self.assertEqual(sql, "SELECT public.finalize_automation_job(%s, %s, %s, %s)")
+        self.assertEqual(params[0], "job-uuid")
+        self.assertEqual(params[1], "succeeded")
+        self.assertEqual(params[3], None)
+
+    def test_resolve_automation_account_targets_maps_rows(self) -> None:
+        connection = FakeConnection(rows=[("account-uuid", "IBKR", "U100", "USD", "Main")])
+        database = SuperFolioDatabase(connection)
+
+        accounts = database.resolve_automation_account_targets(
+            brokerage_code="IBKR",
+            account_external_ids=["U100"],
+        )
+
+        self.assertEqual(
+            accounts,
+            [AutomationAccountTarget("account-uuid", "IBKR", "U100", "USD", "Main")],
+        )
+        sql, params = connection.cursor_instance.executed[0]
+        self.assertIn("public.resolve_automation_account_targets", sql)
+        self.assertEqual(params, ("IBKR", ["U100"]))
+
+    def test_resolve_automation_account_targets_handles_null_display_name(self) -> None:
+        connection = FakeConnection(rows=[("account-uuid", "IBKR", "U100", "USD", None)])
+        database = SuperFolioDatabase(connection)
+
+        accounts = database.resolve_automation_account_targets(
+            brokerage_code="IBKR",
+            account_external_ids=["U100"],
+        )
+
+        self.assertIsNone(accounts[0].display_name)
+
+    def test_add_automation_job_account_calls_database_function(self) -> None:
+        connection = FakeConnection(("job-account-uuid",))
+        database = SuperFolioDatabase(connection)
+
+        job_account_id = database.add_automation_job_account(
+            AutomationJobAccountAdd(
+                automation_job_id="job-uuid",
+                account_id="account-uuid",
+            )
+        )
+
+        self.assertEqual(job_account_id, "job-account-uuid")
+        self.assertEqual(connection.commit_count, 1)
+        sql, params = connection.cursor_instance.executed[0]
+        self.assertEqual(sql, "SELECT public.add_automation_job_account(%s, %s)")
+        self.assertEqual(params, ("job-uuid", "account-uuid"))
+
+    def test_mark_automation_job_account_running_calls_database_function(self) -> None:
+        connection = FakeConnection(("job-account-uuid",))
+        database = SuperFolioDatabase(connection)
+
+        result = database.mark_automation_job_account_running("job-account-uuid")
+
+        self.assertEqual(result, "job-account-uuid")
+        self.assertEqual(connection.commit_count, 1)
+        sql, params = connection.cursor_instance.executed[0]
+        self.assertEqual(sql, "SELECT public.mark_automation_job_account_running(%s)")
+        self.assertEqual(params, ("job-account-uuid",))
+
+    def test_finalize_automation_job_account_calls_database_function(self) -> None:
+        connection = FakeConnection(("job-account-uuid",))
+        database = SuperFolioDatabase(connection)
+
+        result = database.finalize_automation_job_account(
+            AutomationJobAccountFinalize(
+                automation_job_account_id="job-account-uuid",
+                status="succeeded",
+                ingestion_run_id="run-uuid",
+                summary={"inserted_count": 5},
+                error_message=None,
+            )
+        )
+
+        self.assertEqual(result, "job-account-uuid")
+        self.assertEqual(connection.commit_count, 1)
+        sql, params = connection.cursor_instance.executed[0]
+        self.assertEqual(sql, "SELECT public.finalize_automation_job_account(%s, %s, %s, %s, %s)")
+        self.assertEqual(params[0], "job-account-uuid")
+        self.assertEqual(params[1], "succeeded")
+        self.assertEqual(params[2], "run-uuid")
+        self.assertEqual(params[4], None)
+
+    def test_finalize_automation_job_account_allows_optional_fields(self) -> None:
+        connection = FakeConnection(("job-account-uuid",))
+        database = SuperFolioDatabase(connection)
+
+        database.finalize_automation_job_account(
+            AutomationJobAccountFinalize(
+                automation_job_account_id="job-account-uuid",
+                status="failed",
+                error_message="something went wrong",
+            )
+        )
+
+        _, params = connection.cursor_instance.executed[0]
+        self.assertEqual(params[2], None)
+        self.assertEqual(params[4], "something went wrong")
+
+    def test_resolve_automation_portfolio_accounts_maps_rows(self) -> None:
+        connection = FakeConnection(
+            rows=[
+                ("account-uuid", "IBKR", "U100", "USD", "Main"),
+                ("account-uuid2", "IBKR", "U200", "CAD", None),
+            ]
+        )
+        database = SuperFolioDatabase(connection)
+
+        accounts = database.resolve_automation_portfolio_accounts(
+            portfolio_name="All Accounts",
+            brokerage_code="IBKR",
+        )
+
+        self.assertEqual(len(accounts), 2)
+        self.assertEqual(accounts[0].account_id, "account-uuid")
+        self.assertEqual(accounts[0].account_external_id, "U100")
+        self.assertIsNone(accounts[1].display_name)
+        sql, params = connection.cursor_instance.executed[0]
+        self.assertIn("public.resolve_automation_portfolio_accounts", sql)
+        self.assertEqual(params, ("All Accounts", "IBKR"))
+
+    def test_fail_stale_automation_runs_returns_count(self) -> None:
+        connection = FakeConnection((3,))
+        database = SuperFolioDatabase(connection)
+
+        count = database.fail_stale_automation_runs(
+            stale_before=date(2026, 5, 1),
+            error_message="timed out",
+        )
+
+        self.assertEqual(count, 3)
+        self.assertEqual(connection.commit_count, 1)
+        sql, params = connection.cursor_instance.executed[0]
+        self.assertEqual(sql, "SELECT public.fail_stale_automation_runs(%s, %s)")
+        self.assertEqual(params, (date(2026, 5, 1), "timed out"))
 
 
 if __name__ == "__main__":

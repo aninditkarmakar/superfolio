@@ -68,6 +68,49 @@ class BulkIngestionSummary:
     record_results: list[dict[str, Any]]
 
 
+@dataclass(frozen=True)
+class AutomationJobStart:
+    trigger_type: str
+    target_type: str
+    portfolio_id: str | None
+    integration_key: str
+    mode: str
+    requested_start_date: date
+    requested_end_date: date
+
+
+@dataclass(frozen=True)
+class AutomationJobFinalize:
+    automation_job_id: str
+    status: str
+    summary: dict[str, Any] | None = None
+    error_message: str | None = None
+
+
+@dataclass(frozen=True)
+class AutomationJobAccountAdd:
+    automation_job_id: str
+    account_id: str
+
+
+@dataclass(frozen=True)
+class AutomationJobAccountFinalize:
+    automation_job_account_id: str
+    status: str
+    ingestion_run_id: str | None = None
+    summary: dict[str, Any] | None = None
+    error_message: str | None = None
+
+
+@dataclass(frozen=True)
+class AutomationAccountTarget:
+    account_id: str
+    brokerage_code: str
+    account_external_id: str
+    base_currency: str
+    display_name: str | None
+
+
 class SuperFolioDatabase:
     def __init__(self, connection: ConnectionLike) -> None:
         self._connection = connection
@@ -116,6 +159,85 @@ class SuperFolioDatabase:
             (ingestion_run_id, status, error_message),
         )
         return str(row[0])
+
+    def create_automation_job(self, request: AutomationJobStart) -> str:
+        row = self._fetch_one(
+            "SELECT public.create_automation_job(%s, %s, %s, %s, %s, %s, %s)",
+            (
+                request.trigger_type,
+                request.target_type,
+                request.portfolio_id,
+                request.integration_key,
+                request.mode,
+                request.requested_start_date,
+                request.requested_end_date,
+            ),
+        )
+        return str(row[0])
+
+    def finalize_automation_job(self, request: AutomationJobFinalize) -> str:
+        row = self._fetch_one(
+            "SELECT public.finalize_automation_job(%s, %s, %s, %s)",
+            (
+                request.automation_job_id,
+                request.status,
+                _jsonb(request.summary),
+                request.error_message,
+            ),
+        )
+        return str(row[0])
+
+    def add_automation_job_account(self, request: AutomationJobAccountAdd) -> str:
+        row = self._fetch_one(
+            "SELECT public.add_automation_job_account(%s, %s)",
+            (request.automation_job_id, request.account_id),
+        )
+        return str(row[0])
+
+    def mark_automation_job_account_running(self, automation_job_account_id: str) -> str:
+        row = self._fetch_one(
+            "SELECT public.mark_automation_job_account_running(%s)",
+            (automation_job_account_id,),
+        )
+        return str(row[0])
+
+    def finalize_automation_job_account(self, request: AutomationJobAccountFinalize) -> str:
+        row = self._fetch_one(
+            "SELECT public.finalize_automation_job_account(%s, %s, %s, %s, %s)",
+            (
+                request.automation_job_account_id,
+                request.status,
+                request.ingestion_run_id,
+                _jsonb(request.summary),
+                request.error_message,
+            ),
+        )
+        return str(row[0])
+
+    def resolve_automation_portfolio_accounts(
+        self, *, portfolio_name: str, brokerage_code: str
+    ) -> list[AutomationAccountTarget]:
+        rows = self._fetch_all(
+            "SELECT * FROM public.resolve_automation_portfolio_accounts(%s, %s)",
+            (portfolio_name, brokerage_code),
+        )
+        return [_automation_account_target_from_row(row) for row in rows]
+
+    def resolve_automation_account_targets(
+        self, *, brokerage_code: str, account_external_ids: list[str]
+    ) -> list[AutomationAccountTarget]:
+        rows = self._fetch_all(
+            "SELECT * FROM public.resolve_automation_account_targets(%s, %s)",
+            (brokerage_code, account_external_ids),
+        )
+        return [_automation_account_target_from_row(row) for row in rows]
+
+    def fail_stale_automation_runs(self, *, stale_before: date, error_message: str) -> int:
+        row = self._fetch_one(
+            "SELECT public.fail_stale_automation_runs(%s, %s)",
+            (stale_before, error_message),
+        )
+        return int(row[0])
 
     def bulk_ingest_cash_flows(
         self, ingestion_run_id: str, records: list[dict[str, Any]]
@@ -441,6 +563,16 @@ def _bulk_summary_from_row(row: tuple[Any, ...]) -> BulkIngestionSummary:
         conflict_count=int(row[4]),
         skipped_accounts=list(row[5] or []),
         record_results=list(row[6] or []),
+    )
+
+
+def _automation_account_target_from_row(row: tuple[Any, ...]) -> AutomationAccountTarget:
+    return AutomationAccountTarget(
+        account_id=str(row[0]),
+        brokerage_code=str(row[1]),
+        account_external_id=str(row[2]),
+        base_currency=str(row[3]),
+        display_name=None if row[4] is None else str(row[4]),
     )
 
 
