@@ -214,6 +214,16 @@ class SuperFolioDatabase:
         )
         return str(row[0])
 
+    def get_portfolio_id_by_name(self, portfolio_name: str) -> str | None:
+        """Return the UUID of an active portfolio by name, or None if not found."""
+        rows = self._fetch_all(
+            "SELECT id FROM public.portfolios WHERE name = %s AND is_active = true",
+            (portfolio_name,),
+        )
+        if not rows:
+            return None
+        return str(rows[0][0])
+
     def resolve_automation_portfolio_accounts(
         self, *, portfolio_name: str, brokerage_code: str
     ) -> list[AutomationAccountTarget]:

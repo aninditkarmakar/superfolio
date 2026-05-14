@@ -203,15 +203,34 @@ class FakeAutomationDatabase:
         # Overlap detection (Task 15)
         self.overlapping_load: bool = False
         self.overlap_check_calls: list = []
+        # Portfolio id resolution (Issue 1 fix)
+        self.portfolio_id_by_name: dict[str, str] = {}
+        self.portfolio_id_lookup_calls: list[str] = []
 
     def fail_stale_automation_runs(self, *, stale_before, error_message) -> int:
         self._event_log.append("fail_stale")
         self.fail_stale_calls.append({"stale_before": stale_before, "error_message": error_message})
         return 0
 
+    def get_portfolio_id_by_name(self, portfolio_name: str) -> str | None:
+        """Return the portfolio UUID for the given active portfolio name, or None if not found."""
+        self.portfolio_id_lookup_calls.append(portfolio_name)
+        return self.portfolio_id_by_name.get(portfolio_name)
+
     def create_automation_job(self, request) -> str:
         if self._raise_on_create is not None:
             raise self._raise_on_create
+        # Enforce the DB check constraint: portfolio_id IS NOT NULL for portfolio target.
+        if request.target_type == "portfolio" and request.portfolio_id is None:
+            raise ValueError(
+                "automation_jobs_portfolio_target_check: portfolio_id must not be NULL"
+                " for target_type='portfolio'"
+            )
+        if request.target_type == "accounts" and request.portfolio_id is not None:
+            raise ValueError(
+                "automation_jobs_portfolio_target_check: portfolio_id must be NULL"
+                " for target_type='accounts'"
+            )
         self._event_log.append("create_job")
         self.created_jobs.append(request)
         return "job-uuid"
@@ -573,6 +592,7 @@ class AutomationOrchestratorTargetResolutionTests(unittest.TestCase):
         """Portfolio target calls resolve_automation_portfolio_accounts and adds a child row."""
         request = self._make_portfolio_request()
         db = FakeAutomationDatabase()
+        db.portfolio_id_by_name["MyPortfolio"] = "portfolio-uuid"
         db.portfolio_accounts = [self._make_account_target(account_id="port-acct-uuid")]
 
         self._run(request, db)
@@ -586,6 +606,7 @@ class AutomationOrchestratorTargetResolutionTests(unittest.TestCase):
         """resolve_automation_portfolio_accounts is called with portfolio_name and brokerage_code."""
         request = self._make_portfolio_request(portfolio_name="MyPortfolio")
         db = FakeAutomationDatabase()
+        db.portfolio_id_by_name["MyPortfolio"] = "portfolio-uuid"
         db.portfolio_accounts = [self._make_account_target()]
 
         self._run(request, db)
@@ -834,7 +855,8 @@ class AutomationOrchestratorDryRunTests(unittest.TestCase):
         self.assertEqual(len(preflight_calls), 1)
 
     def test_preflight_runtime_error_finalizes_parent_failed(self):
-        """RuntimeError from adapter.preflight_validate_config finalizes parent as failed; no child finalization."""
+        """RuntimeError from adapter.preflight_validate_config finalizes parent as failed.
+        Children must also be finalized as failed (Issue 2 fix: no pending children remain)."""
         request = self._make_request()
         db = self._make_db_with_accounts(self._make_account_target())
 
@@ -846,7 +868,8 @@ class AutomationOrchestratorDryRunTests(unittest.TestCase):
 
         self.assertEqual(len(db.finalized_jobs), 1)
         self.assertEqual(db.finalized_jobs[0].status, "failed")
-        self.assertEqual(len(db.finalized_children), 0, "no child should be finalized on preflight failure")
+        self.assertEqual(len(db.finalized_children), 1, "child must be finalized on preflight failure")
+        self.assertEqual(db.finalized_children[0].status, "failed")
         self.assertIsNotNone(db.finalized_jobs[0].error_message)
 
     def test_preflight_failure_error_is_sanitized(self):
@@ -2448,6 +2471,381 @@ class AutomationOrchestratorOverlapTests(unittest.TestCase):
         self.assertEqual(summary["error_category"], "overlapping_load_job")
         self.assertNotEqual(summary.get("error_category"), "fetch_or_parse_error")
 
+
+# ---------------------------------------------------------------------------
+# Final review Issue 1: Portfolio target must resolve portfolio_id before job creation
+# ---------------------------------------------------------------------------
+
+
+class PortfolioJobPortfolioIdResolutionTests(unittest.TestCase):
+    """Tests for Issue 1: portfolio jobs must have portfolio_id resolved before parent job creation."""
+
+    def _run(self, request, db, adapter=None):
+        from portfolio_engine.automation.orchestrator import run_automation
+        if adapter is None:
+            adapter = FakeAdapter()
+        return run_automation(request, database=db, adapter=adapter)
+
+    def _make_portfolio_request(self, **kwargs):
+        from portfolio_engine.automation.types import AutomationRunRequest
+        defaults = dict(
+            target_type="portfolio",
+            integration_key="ibkr_flex_ws",
+            mode="dry-run",
+            requested_start_date=date(2024, 1, 1),
+            requested_end_date=date(2024, 1, 31),
+            portfolio_name="MyPortfolio",
+        )
+        defaults.update(kwargs)
+        return AutomationRunRequest(**defaults)
+
+    def _make_accounts_request(self, **kwargs):
+        from portfolio_engine.automation.types import AutomationRunRequest
+        defaults = dict(
+            target_type="accounts",
+            integration_key="ibkr_flex_ws",
+            mode="dry-run",
+            requested_start_date=date(2024, 1, 1),
+            requested_end_date=date(2024, 1, 31),
+            account_external_ids=("U100",),
+        )
+        defaults.update(kwargs)
+        return AutomationRunRequest(**defaults)
+
+    def _make_account_target(self, *, account_id="account-uuid", external_id="U100"):
+        from portfolio_engine.database import AutomationAccountTarget
+        return AutomationAccountTarget(
+            account_id=account_id,
+            brokerage_code="IBKR",
+            account_external_id=external_id,
+            base_currency="USD",
+            display_name="Main",
+        )
+
+    def test_portfolio_job_creates_parent_with_non_null_portfolio_id(self):
+        """Portfolio target job must have portfolio_id set on the created parent row."""
+        request = self._make_portfolio_request()
+        db = FakeAutomationDatabase()
+        db.portfolio_id_by_name["MyPortfolio"] = "resolved-portfolio-uuid"
+        db.portfolio_accounts = [self._make_account_target(account_id="port-acct")]
+
+        self._run(request, db)
+
+        self.assertEqual(len(db.created_jobs), 1)
+        job = db.created_jobs[0]
+        self.assertIsNotNone(job.portfolio_id, "portfolio_id must not be None for portfolio target job")
+
+    def test_portfolio_job_portfolio_id_matches_resolved_id(self):
+        """portfolio_id on the created parent job must match the id returned by get_portfolio_id_by_name."""
+        request = self._make_portfolio_request()
+        db = FakeAutomationDatabase()
+        db.portfolio_id_by_name["MyPortfolio"] = "resolved-portfolio-uuid"
+        db.portfolio_accounts = [self._make_account_target()]
+
+        self._run(request, db)
+
+        self.assertEqual(len(db.created_jobs), 1)
+        self.assertEqual(db.created_jobs[0].portfolio_id, "resolved-portfolio-uuid")
+
+    def test_portfolio_id_looked_up_before_job_creation(self):
+        """get_portfolio_id_by_name must be called before create_automation_job."""
+        request = self._make_portfolio_request()
+        db = FakeAutomationDatabase()
+        db.portfolio_id_by_name["MyPortfolio"] = "resolved-portfolio-uuid"
+        db.portfolio_accounts = [self._make_account_target()]
+
+        self._run(request, db)
+
+        self.assertEqual(len(db.portfolio_id_lookup_calls), 1)
+        self.assertEqual(db.portfolio_id_lookup_calls[0], "MyPortfolio")
+        # Verify ordering: lookup happened before create_job
+        lookup_idx = db._event_log.index("create_job")
+        # lookup happens before create_job (not in event log itself, but create_job must appear)
+        self.assertGreater(lookup_idx, -1, "create_job must appear in event log after lookup")
+
+    def test_portfolio_unknown_portfolio_raises_before_job_creation(self):
+        """When portfolio is not found by name, the error must occur before any parent job is created."""
+        request = self._make_portfolio_request()
+        db = FakeAutomationDatabase()
+        # portfolio_id_by_name is empty — portfolio "MyPortfolio" not found
+
+        with self.assertRaises(Exception):
+            self._run(request, db)
+
+        self.assertEqual(len(db.created_jobs), 0, "no job must be created when portfolio not found")
+
+    def test_portfolio_unknown_portfolio_raises_validation_error(self):
+        """Unknown portfolio name raises AutomationValidationError or ValueError before job creation."""
+        from portfolio_engine.automation.targets import AutomationValidationError
+        request = self._make_portfolio_request(portfolio_name="NonExistentPortfolio")
+        db = FakeAutomationDatabase()
+        # portfolio_id_by_name is empty — portfolio not found
+
+        with self.assertRaises((AutomationValidationError, ValueError)) as ctx:
+            self._run(request, db)
+
+        self.assertIn("NonExistentPortfolio", str(ctx.exception))
+
+    def test_accounts_job_has_null_portfolio_id(self):
+        """Accounts target job must still have portfolio_id=None (existing behavior preserved)."""
+        from portfolio_engine.database import AutomationAccountTarget
+        request = self._make_accounts_request()
+        db = FakeAutomationDatabase()
+        db.account_targets = [
+            AutomationAccountTarget(
+                account_id="acct-uuid",
+                brokerage_code="IBKR",
+                account_external_id="U100",
+                base_currency="USD",
+                display_name="Main",
+            )
+        ]
+
+        self._run(request, db)
+
+        self.assertEqual(len(db.created_jobs), 1)
+        self.assertIsNone(db.created_jobs[0].portfolio_id)
+
+    def test_fake_db_enforces_portfolio_id_non_null_for_portfolio_jobs(self):
+        """FakeAutomationDatabase constraint: portfolio job with portfolio_id=None raises ValueError."""
+        from portfolio_engine.database import AutomationJobStart
+        db = FakeAutomationDatabase()
+        bad_request = AutomationJobStart(
+            trigger_type="manual",
+            target_type="portfolio",
+            portfolio_id=None,
+            integration_key="ibkr_flex_ws",
+            mode="dry-run",
+            requested_start_date=date(2024, 1, 1),
+            requested_end_date=date(2024, 1, 31),
+        )
+        with self.assertRaises(ValueError):
+            db.create_automation_job(bad_request)
+
+    def test_fake_db_enforces_portfolio_id_null_for_accounts_jobs(self):
+        """FakeAutomationDatabase constraint: accounts job with portfolio_id set raises ValueError."""
+        from portfolio_engine.database import AutomationJobStart
+        db = FakeAutomationDatabase()
+        bad_request = AutomationJobStart(
+            trigger_type="manual",
+            target_type="accounts",
+            portfolio_id="some-uuid",
+            integration_key="ibkr_flex_ws",
+            mode="dry-run",
+            requested_start_date=date(2024, 1, 1),
+            requested_end_date=date(2024, 1, 31),
+        )
+        with self.assertRaises(ValueError):
+            db.create_automation_job(bad_request)
+
+    def test_portfolio_job_get_portfolio_id_called_with_correct_name(self):
+        """get_portfolio_id_by_name must be called with the portfolio_name from the request."""
+        request = self._make_portfolio_request(portfolio_name="SpecificPortfolio")
+        db = FakeAutomationDatabase()
+        db.portfolio_id_by_name["SpecificPortfolio"] = "specific-portfolio-uuid"
+        db.portfolio_accounts = [self._make_account_target()]
+
+        self._run(request, db)
+
+        self.assertEqual(len(db.portfolio_id_lookup_calls), 1)
+        self.assertEqual(db.portfolio_id_lookup_calls[0], "SpecificPortfolio")
+
+    def test_portfolio_job_resolves_accounts_after_portfolio_id_lookup(self):
+        """Portfolio account resolution must still happen after portfolio_id is resolved."""
+        request = self._make_portfolio_request()
+        db = FakeAutomationDatabase()
+        db.portfolio_id_by_name["MyPortfolio"] = "portfolio-uuid"
+        db.portfolio_accounts = [self._make_account_target(account_id="port-acct")]
+
+        self._run(request, db)
+
+        self.assertEqual(len(db.portfolio_resolve_calls), 1)
+        self.assertEqual(len(db.added_accounts), 1)
+
+
+# ---------------------------------------------------------------------------
+# Final review Issue 2: Preflight failure must finalize children before parent
+# ---------------------------------------------------------------------------
+
+
+class PreflightFailureChildFinalizationTests(unittest.TestCase):
+    """Tests for Issue 2: children must be finalized as failed when preflight validation fails."""
+
+    def _run(self, request, db, adapter=None):
+        from portfolio_engine.automation.orchestrator import run_automation
+        if adapter is None:
+            adapter = FakeAdapter()
+        return run_automation(request, database=db, adapter=adapter)
+
+    def _make_request(self, **kwargs):
+        from portfolio_engine.automation.types import AutomationRunRequest
+        defaults = dict(
+            target_type="accounts",
+            integration_key="ibkr_flex_ws",
+            mode="dry-run",
+            requested_start_date=date(2024, 1, 1),
+            requested_end_date=date(2024, 1, 31),
+            account_external_ids=("U100",),
+        )
+        defaults.update(kwargs)
+        return AutomationRunRequest(**defaults)
+
+    def _make_account_target(self, *, account_id="account-uuid", external_id="U100"):
+        from portfolio_engine.database import AutomationAccountTarget
+        return AutomationAccountTarget(
+            account_id=account_id,
+            brokerage_code="IBKR",
+            account_external_id=external_id,
+            base_currency="USD",
+            display_name="Main",
+        )
+
+    def _make_db_with_accounts(self, *accounts):
+        db = FakeAutomationDatabase()
+        db.account_targets = list(accounts)
+        return db
+
+    class _FailPreflight(FakeAdapter):
+        def preflight_validate_config(self, config) -> None:
+            raise RuntimeError("missing required environment variables: IBKR_FLEX_TOKEN")
+
+    def test_preflight_failure_finalizes_single_child_as_failed(self):
+        """Preflight failure with one child: child must be finalized as failed (not left pending)."""
+        request = self._make_request()
+        db = self._make_db_with_accounts(self._make_account_target())
+
+        self._run(request, db, adapter=self._FailPreflight())
+
+        self.assertEqual(len(db.finalized_children), 1)
+        self.assertEqual(db.finalized_children[0].status, "failed")
+
+    def test_preflight_failure_finalizes_all_children_when_multiple(self):
+        """Preflight failure with two children: both must be finalized as failed."""
+        request = self._make_request(account_external_ids=("U100", "U200"))
+        db = self._make_db_with_accounts(
+            self._make_account_target(account_id="acct-1", external_id="U100"),
+            self._make_account_target(account_id="acct-2", external_id="U200"),
+        )
+
+        self._run(request, db, adapter=self._FailPreflight())
+
+        self.assertEqual(len(db.finalized_children), 2)
+        for child in db.finalized_children:
+            self.assertEqual(child.status, "failed")
+
+    def test_preflight_failure_no_pending_child_remains(self):
+        """After preflight failure, no child added via add_automation_job_account remains unfinalized."""
+        request = self._make_request(account_external_ids=("U100", "U200"))
+        db = self._make_db_with_accounts(
+            self._make_account_target(account_id="acct-1", external_id="U100"),
+            self._make_account_target(account_id="acct-2", external_id="U200"),
+        )
+
+        self._run(request, db, adapter=self._FailPreflight())
+
+        added_child_ids = {cid for cid, _ in db.added_accounts}
+        finalized_child_ids = {f.automation_job_account_id for f in db.finalized_children}
+        self.assertEqual(added_child_ids, finalized_child_ids,
+                         "Every added child must be finalized after preflight failure")
+
+    def test_preflight_failure_child_error_category_is_preflight_failed(self):
+        """Child summary error_category on preflight failure must be 'preflight_failed'."""
+        request = self._make_request()
+        db = self._make_db_with_accounts(self._make_account_target())
+
+        self._run(request, db, adapter=self._FailPreflight())
+
+        child_fin = db.finalized_children[0]
+        self.assertIsNotNone(child_fin.summary)
+        self.assertIn("error_category", child_fin.summary)
+        self.assertEqual(child_fin.summary["error_category"], "preflight_failed")
+
+    def test_preflight_failure_child_summary_has_record_counts(self):
+        """Child summary on preflight failure must have record_counts (privacy-safe shape)."""
+        request = self._make_request()
+        db = self._make_db_with_accounts(self._make_account_target())
+
+        self._run(request, db, adapter=self._FailPreflight())
+
+        child_fin = db.finalized_children[0]
+        self.assertIsNotNone(child_fin.summary)
+        self.assertIn("record_counts", child_fin.summary)
+
+    def test_preflight_failure_child_has_sanitized_error_message(self):
+        """Child error_message on preflight failure must be sanitized (no raw secrets)."""
+        request = self._make_request()
+        db = self._make_db_with_accounts(self._make_account_target())
+
+        class FailPreflightWithSecret(FakeAdapter):
+            def preflight_validate_config(self, config) -> None:
+                raise RuntimeError("token=supersecret postgresql://user:pass@host/db")
+
+        self._run(request, db, adapter=FailPreflightWithSecret())
+
+        child_fin = db.finalized_children[0]
+        self.assertIsNotNone(child_fin.error_message)
+        self.assertNotIn("supersecret", child_fin.error_message or "")
+        self.assertNotIn("postgresql://", child_fin.error_message or "")
+
+    def test_preflight_failure_parent_summary_reflects_all_children_failed(self):
+        """Parent summary account_counts must reflect all children failed when preflight fails."""
+        request = self._make_request(account_external_ids=("U100", "U200"))
+        db = self._make_db_with_accounts(
+            self._make_account_target(account_id="acct-1", external_id="U100"),
+            self._make_account_target(account_id="acct-2", external_id="U200"),
+        )
+
+        self._run(request, db, adapter=self._FailPreflight())
+
+        self.assertEqual(len(db.finalized_jobs), 1)
+        parent = db.finalized_jobs[0]
+        self.assertIsNotNone(parent.summary)
+        counts = parent.summary["account_counts"]
+        self.assertEqual(counts["total"], 2)
+        self.assertEqual(counts["failed"], 2)
+        self.assertEqual(counts["succeeded"], 0)
+
+    def test_preflight_failure_parent_status_is_failed(self):
+        """Parent status must be 'failed' when preflight fails."""
+        request = self._make_request(account_external_ids=("U100", "U200"))
+        db = self._make_db_with_accounts(
+            self._make_account_target(account_id="acct-1", external_id="U100"),
+            self._make_account_target(account_id="acct-2", external_id="U200"),
+        )
+
+        self._run(request, db, adapter=self._FailPreflight())
+
+        self.assertEqual(db.finalized_jobs[0].status, "failed")
+
+    def test_preflight_failure_children_finalized_before_parent(self):
+        """All child finalizations must occur before the parent finalization in event log."""
+        request = self._make_request(account_external_ids=("U100", "U200"))
+        db = self._make_db_with_accounts(
+            self._make_account_target(account_id="acct-1", external_id="U100"),
+            self._make_account_target(account_id="acct-2", external_id="U200"),
+        )
+
+        self._run(request, db, adapter=self._FailPreflight())
+
+        log = db._event_log
+        parent_finalize_idx = [i for i, e in enumerate(log) if e == "finalize_job"]
+        child_finalize_indices = [i for i, e in enumerate(log) if e.startswith("finalize_child:")]
+
+        self.assertEqual(len(parent_finalize_idx), 1)
+        self.assertEqual(len(child_finalize_indices), 2)
+        parent_idx = parent_finalize_idx[0]
+        for child_idx in child_finalize_indices:
+            self.assertLess(child_idx, parent_idx,
+                            "child finalization must occur before parent finalization")
+
+    def test_preflight_failure_result_has_child_ids(self):
+        """AutomationRunResult.automation_job_account_ids must include child ids even on preflight failure."""
+        request = self._make_request()
+        db = self._make_db_with_accounts(self._make_account_target())
+
+        result = self._run(request, db, adapter=self._FailPreflight())
+
+        self.assertIn("child-1", result.automation_job_account_ids)
 
 if __name__ == "__main__":
     unittest.main()

@@ -56,11 +56,24 @@ def run_automation(request: AutomationRunRequest, *, database, adapter=None) -> 
         error_message="stale_run_timeout",
     )
 
+    # Resolve portfolio_id before creating the parent job so the DB check constraint
+    # (portfolio_id IS NOT NULL for target_type='portfolio') is always satisfied.
+    # If the portfolio cannot be found, raise before creating any job record — the schema
+    # cannot persist a portfolio job without a valid portfolio_id.
+    portfolio_id: str | None = None
+    if request.target_type == "portfolio":
+        portfolio_name = request.portfolio_name or ""
+        portfolio_id = database.get_portfolio_id_by_name(portfolio_name)
+        if portfolio_id is None:
+            raise AutomationValidationError(
+                f"portfolio not found or inactive: {portfolio_name!r}"
+            )
+
     job_id = database.create_automation_job(
         AutomationJobStart(
             trigger_type="manual",
             target_type=request.target_type,
-            portfolio_id=None,
+            portfolio_id=portfolio_id,
             integration_key=request.integration_key,
             mode=request.mode,
             requested_start_date=request.requested_start_date,
@@ -120,7 +133,20 @@ def run_automation(request: AutomationRunRequest, *, database, adapter=None) -> 
         adapter.preflight_validate_config(config)
     except RuntimeError as exc:
         error_message = sanitize_error_message(str(exc))
-        summary = build_parent_summary([], [])
+        failed_child_summary = build_child_summary(error_category="preflight_failed")
+        for child_id, _ in child_pairs:
+            database.finalize_automation_job_account(
+                AutomationJobAccountFinalize(
+                    automation_job_account_id=child_id,
+                    status="failed",
+                    ingestion_run_id=None,
+                    summary=failed_child_summary,
+                    error_message=error_message,
+                )
+            )
+        child_statuses_preflight = ["failed"] * len(child_pairs)
+        child_summaries_preflight = [failed_child_summary] * len(child_pairs)
+        summary = build_parent_summary(child_statuses_preflight, child_summaries_preflight)
         database.finalize_automation_job(
             AutomationJobFinalize(
                 automation_job_id=job_id,
