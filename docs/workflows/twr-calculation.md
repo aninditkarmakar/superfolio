@@ -1,8 +1,9 @@
 # TWR Calculation Workflow
 
-SuperFolio supports two TWR calculation workflows:
+SuperFolio supports three TWR calculation workflows:
 - `scripts/calculate_twr.py` calculates daily linked TWR from local IBKR Flex XML reports and does not query PostgreSQL.
 - `scripts/calculate_twr_from_db.py` calculates daily linked TWR from normalized PostgreSQL facts for one selected brokerage account.
+- `scripts/calculate_portfolio_twr_from_db.py` calculates daily linked TWR for one logical portfolio across its member accounts.
 
 ## Inputs
 
@@ -50,6 +51,19 @@ python scripts/calculate_twr_from_db.py \
 
 The database-backed command uses `DATABASE_URL` by default and accepts `--database-url` for a one-run override. It reads `daily_nav_snapshots` and only `cash_flows` rows whose `cash_flow_type` is `Deposits/Withdrawals`. It does not accept a cash-flow type option.
 
+## Portfolio database-backed command
+
+```bash
+python scripts/calculate_portfolio_twr_from_db.py \
+  --portfolio-name "All Accounts" \
+  --reporting-currency USD \
+  --start-date 2026-01-01 \
+  --end-date 2026-01-31 \
+  --daily-output output/portfolio-twr.csv
+```
+
+The portfolio command uses `DATABASE_URL` by default and accepts `--database-url` for a one-run override. It aggregates member-account NAV snapshots, supported external cash flows, and any active transfer bridge values for the selected portfolio. The optional CSV includes portfolio NAV, net external cash flow, bridge value, missing-NAV diagnostics, period return, and cumulative TWR.
+
 ## Cash-flow alignment
 
 The engine aligns each cash flow to the first NAV date on or after the flow effective date. Cash flows after the final NAV date are dropped and reported as a warning.
@@ -81,3 +95,4 @@ When `--daily-output` is provided, the CSV contains one row per NAV snapshot wit
 - The XML TWR CLI reads local XML files and does not query the database; use `calculate_twr_from_db.py` after records have been loaded into PostgreSQL.
 - The parser uses base-currency values from Flex XML and does not fetch external FX rates.
 - Holdings, attribution, and benchmark comparison are not implemented in this workflow.
+- Portfolio-level TWR requires member accounts and facts to use the requested reporting currency; automatic mixed-currency conversion is not implemented.

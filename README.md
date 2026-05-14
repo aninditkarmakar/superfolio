@@ -1,26 +1,28 @@
 # Consolidated Portfolio Tracker
 
-A professional-grade, public-facing investment dashboard that tracks portfolio performance across multiple brokerage accounts, international borders, and currencies.
+A portfolio data engine for tracking consolidated investment performance across multiple brokerage accounts and currencies.
 
 ## 🚀 Overview
 
-The tracker solves the "History Gap" problem by stitching together historical data from multiple accounts (e.g., a legacy Canadian IBKR account and a current US IBKR account) into a single, continuous Time-Weighted Return (TWR) curve.
+SuperFolio solves the "history gap" problem by stitching together historical data from multiple brokerage accounts into account-level and portfolio-level Time-Weighted Return (TWR) curves.
 
 ### Key Features
-* **Unified Ledger:** Merges disparate brokerage accounts into one logical portfolio view.
-* **Multi-Currency Normalization:** Converts CAD transactions and NAV to USD using the `fxRateToBase` field embedded in each Flex record, keeping source currency, base-currency value, and FX rate fully traceable.
-* **Daily Valuation TWR:** Uses the Daily Valuation Method to calculate performance, isolating investment returns from the effect of external cash flows (deposits/withdrawals).
-* **Privacy-First Public Dashboard:** Exposes percentage growth and top-holding weightings rather than absolute dollar amounts.
-* **Automated Ingestion (planned):** Daily syncs via the IBKR Flex Web Service — no local gateway or 2FA required for reporting.
+* **Unified Portfolio View:** Groups registered brokerage accounts into logical portfolios.
+* **Manual Flex XML Ingestion:** Previews and loads supported IBKR Flex XML records into PostgreSQL with account scoping and idempotent deduplication.
+* **Multi-Currency Normalization:** Preserves source currency, base-currency value, and `fxRateToBase` from each supported Flex record so currency handling remains traceable.
+* **Daily Valuation TWR:** Calculates account-level and portfolio-level performance while isolating investment returns from supported external cash flows.
+* **Privacy-First Reporting Posture:** Favors percentages, relative performance, and redacted or synthetic examples in public documentation.
+
+Planned features include automated IBKR Flex Web Service ingestion, a Next.js dashboard/API, public hosting, attribution, and trade-feed views.
 
 ## 🛠 Tech Stack
 
-The architecture follows a **"Python for Data, TypeScript for UI"** philosophy.
+The current implementation is Python-first, with the TypeScript UI/API still planned.
 
 | Layer | Technology | Status |
 | :--- | :--- | :--- |
-| **Data Engine** | Python 3.12 (stdlib only) | ✅ Implemented |
-| **Database** | PostgreSQL + Sqitch migrations | 🚧 Scaffolded |
+| **Data Engine** | Python 3.12 | ✅ Implemented |
+| **Database** | PostgreSQL + Sqitch migrations | ✅ Implemented |
 | **API** | Next.js Route Handlers | 🗓 Planned |
 | **Frontend** | Next.js + Tremor.so | 🗓 Planned |
 | **Automation** | GitHub Actions | 🗓 Planned |
@@ -29,11 +31,13 @@ The architecture follows a **"Python for Data, TypeScript for UI"** philosophy.
 ## 📂 Project Structure
 
 ```
-portfolio_engine/        # Python calculation engine (no third-party deps)
+portfolio_engine/        # Python parsing, ingestion, database, and TWR engine
   models.py              # CashFlow, NavSnapshot, TwrRow dataclasses
   flex_xml.py            # IBKR Flex XML parsers (CashTransaction, EquitySummaryByReportDateInBase)
   twr.py                 # Daily Valuation TWR math with configurable flow timing
   csv_export.py          # CSV writer for daily TWR output
+  database.py            # PostgreSQL function-call adapter
+  ingestion/             # Flex XML dry-run and database payload mappers
 
 scripts/
   calculate_twr.py                       # End-to-end CLI: Flex XML -> TWR -> optional CSV export
@@ -41,6 +45,7 @@ scripts/
   calculate_portfolio_twr_from_db.py     # Database CLI: portfolio-level TWR across all member accounts
   manage_portfolio.py                    # Portfolio management CLI: create, attach-account, create-bridge
   register_account.py                    # Register a brokerage account before ingestion
+  ingest_flex_file.py                    # Dry-run or load supported Flex XML records
 
 migrations/
   deploy/                # Sqitch deploy scripts
@@ -57,13 +62,13 @@ scratch/                 # Local-only IBKR Flex XML samples (git-ignored, not co
 
 ### Running the TWR CLI
 
-Place your IBKR Flex XML exports in `scratch/` (git-ignored), then run:
+Place local IBKR Flex XML exports in `scratch/` (git-ignored), then run:
 
 ```bash
 python scripts/calculate_twr.py \
   --cash-flows scratch/Cash_Flows.xml \
   --daily-nav  scratch/Daily_NAV.xml \
-  --start-date 2025-01-01 \
+  --start-date 2026-01-01 \
   --daily-output output/twr.csv
 ```
 
@@ -73,7 +78,7 @@ The script prints a summary to stdout and writes an optional daily CSV:
 NAV snapshots: 83
 Cash-flow records: 4
 Return periods: 82
-Date range: 2025-01-02 to 2025-04-25
+Date range: 2026-01-02 to 2026-04-25
 Cash-flow date field: reportDate
 Cash-flow timing: start
 TWR: 12.345678%
@@ -182,6 +187,8 @@ The command prints a portfolio summary to stdout. The optional daily CSV include
 | `portfolio_engine.portfolio_twr` | Portfolio-level TWR aggregation across multiple accounts with transfer bridge support |
 | `portfolio_engine.portfolio_db_twr` | Database-backed portfolio TWR CLI/orchestrator: argument parsing, DB fetch orchestration, optional CSV output, and summary printing |
 | `portfolio_engine.portfolio_cli` | CLI helpers for portfolio management commands |
+| `portfolio_engine.account_cli` | CLI helpers for account registration workflows |
+| `portfolio_engine.ingestion_cli` | CLI helpers for Flex XML dry-run and load workflows |
 
 ## 💻 Development Environment
 
@@ -230,9 +237,9 @@ Before loading manual Flex XML into the database, inspect a file locally:
 
 ```bash
 python scripts/ingest_flex_file.py dry-run scratch/Flex.xml \
-  --account-external-id U17072019 \
-  --start-date 2025-01-01 \
-  --end-date 2025-04-30
+  --account-external-id U100 \
+  --start-date 2026-01-01 \
+  --end-date 2026-04-30
 ```
 
 The dry run scans one Flex XML file for supported records and performs no database writes. A file can contain cash transactions, daily NAV snapshots, or both. Current cash-transaction support is limited to `Deposits/Withdrawals`; other `CashTransaction` types are counted as unsupported and skipped for now.
@@ -244,9 +251,9 @@ After reviewing a dry run and registering the accounts found in the file, load s
 ```bash
 python scripts/ingest_flex_file.py load scratch/Flex.xml \
   --brokerage-code IBKR \
-  --account-external-id U17072019 \
-  --start-date 2025-01-01 \
-  --end-date 2025-04-30
+  --account-external-id U100 \
+  --start-date 2026-01-01 \
+  --end-date 2026-04-30
 ```
 
 The load command uses `DATABASE_URL` by default. Pass `--database-url` to override it for one run. One load command creates one ingestion run for the whole file, bulk-loads supported cash-flow and daily NAV records, and prints privacy-safe inserted/duplicate/skipped/conflict counts. Duplicate records are treated as idempotent re-ingestion; unknown accounts, inactive accounts, and conflicts mark the ingestion run `partially_succeeded`.
@@ -257,13 +264,19 @@ Both dry-run and load are account-scoped. The command only maps supported record
 
 Database changes are managed with [Sqitch](https://sqitch.org/) against PostgreSQL. Migration scripts live under `migrations/`, with project configuration in [`sqitch.conf`](sqitch.conf).
 
-The current example migration creates a simple `example.books` table, keeping example/demo objects out of the default `public` schema:
+The current migration plan includes an initial example migration plus the implemented portfolio schema:
 
 ```text
 migrations/
   deploy/create_books.sql
+  deploy/create_mvp_schema.sql
+  deploy/create_portfolio_layer.sql
   revert/create_books.sql
+  revert/create_mvp_schema.sql
+  revert/create_portfolio_layer.sql
   verify/create_books.sql
+  verify/create_mvp_schema.sql
+  verify/create_portfolio_layer.sql
   sqitch.plan
 ```
 
@@ -279,7 +292,7 @@ sqitch --version
 
 ### Configure the database URL
 
-Keep connection strings out of Git. Add your Neon connection string to the ignored local `.env` file copied from `.env.example` (see the [`.env` reference](#env--local-configuration) in the Development Environment section for the full template).
+Keep connection strings out of Git. Add a local PostgreSQL connection string to the ignored `.env` file copied from `.env.example` (see the [`.env` reference](#env--local-configuration) in the Development Environment section for the full template).
 
 Load it from the repository root without printing the secret, then convert the PostgreSQL URL to Sqitch's `db:pg:` target URI:
 
@@ -298,21 +311,21 @@ sqitch deploy "$SQITCH_TARGET"
 sqitch verify "$SQITCH_TARGET"
 ```
 
-Confirm the example table exists:
+Review the deployed objects with `psql` when needed:
 
 ```bash
-psql "$DATABASE_URL" -c "\d example.books"
+psql "$DATABASE_URL" -c "\dt public.*"
 ```
 
 ### Roll back while developing
 
-Sqitch reverts back to a target change, not a Git-style `HEAD` reference. For the current single example migration, revert back to the empty baseline:
+Sqitch reverts back to a target change, not a Git-style `HEAD` reference. To revert back to the empty baseline:
 
 ```bash
 sqitch revert "$SQITCH_TARGET" --to-change @ROOT
 ```
 
-When the plan has multiple migrations, revert only the latest migration by targeting the previous deployed change:
+To revert only the latest migration, target the previous deployed change:
 
 ```bash
 sqitch revert "$SQITCH_TARGET" --to-change previous_change_name
@@ -335,23 +348,23 @@ sqitch add change_name -n 'Describe the database change'
 
 Sqitch creates matching files under `migrations/deploy/`, `migrations/revert/`, and `migrations/verify/`. Fill in all three files so every migration can be deployed, rolled back, and verified.
 
-## 📊 Planned Database Schema
+## 📊 Implemented Database Model
 
-The intended relational model separates raw broker events from derived portfolio metrics:
+The relational model separates raw broker-origin records from normalized portfolio facts:
 
-* **Accounts** — regional constraints (CAD vs. USD base currency) and status
-* **Transactions** — atomic trade executions (BUY/SELL/DIV)
-* **Cash Flows** — external deposits, withdrawals, and internal transfers
-* **Daily Snapshots** — daily NAV and cash balances for optimized TWR rendering
+* **Brokerages and accounts** — supported integrations, account metadata, base currency, and activity status.
+* **Ingestion runs and source records** — audit each manual file load and deduplicate broker-origin records.
+* **Cash flows and daily NAV snapshots** — normalized account-scoped facts used by TWR calculations.
+* **Portfolios, portfolio accounts, and transfer bridges** — logical multi-account groupings and in-transit transfer adjustments.
+
+See [`docs/database/schema.md`](docs/database/schema.md) and [`docs/database/functions.md`](docs/database/functions.md) for table relationships, constraints, and PostgreSQL function contracts.
 
 ## 📈 Roadmap
 
-- [ ] **Supabase Schema + Ingestion:** Persist parsed Flex records to PostgreSQL with idempotent upserts.
+- [x] **PostgreSQL Schema + Manual Ingestion:** Persist supported Flex records to PostgreSQL with idempotent upserts.
+- [x] **Portfolio Layer:** Group registered accounts and calculate portfolio-level TWR with transfer bridge support.
 - [ ] **Next.js Dashboard:** Dense, scan-friendly chart UI displaying TWR curve and holding weightings.
 - [ ] **GitHub Actions Automation:** Scheduled daily Flex XML fetch and TWR recalculation.
 - [ ] **Alpha Attribution:** Decompose returns by sector and timing.
 - [ ] **Public Trade Feed:** Recent executions and per-trade P&L (redacted to percentages).
 - [ ] **Multi-Broker Integration:** Expand beyond IBKR using the established schema.
-
----
-*Developed by a software engineer with a 3-year track record of market-beating returns.*
