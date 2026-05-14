@@ -90,6 +90,56 @@ integrations:
         with self.assertRaisesRegex(ValueError, "integration 'test' has unsupported modes: bogus"):
             load_integration_config("test", path=path)
 
+    def test_null_scalar_field_fails_with_context(self) -> None:
+        path = self._write_config(
+            """
+integrations:
+  test:
+    brokerage_code:
+    source_type: FLEX_WEB_SERVICE
+    adapter_key: ibkr_flex_ws
+    supported_modes:
+      - dry-run
+    required_env_keys:
+      - DATABASE_URL
+    stale_running_timeout_minutes: 120
+"""
+        )
+
+        with self.assertRaisesRegex(ValueError, "integration 'test' field brokerage_code must not be null"):
+            load_integration_config("test", path=path)
+
+    def test_null_timeout_field_fails_with_context(self) -> None:
+        path = self._write_config(
+            """
+integrations:
+  test:
+    brokerage_code: IBKR
+    source_type: FLEX_WEB_SERVICE
+    adapter_key: ibkr_flex_ws
+    supported_modes:
+      - dry-run
+    required_env_keys:
+      - DATABASE_URL
+    stale_running_timeout_minutes:
+"""
+        )
+
+        with self.assertRaisesRegex(
+            ValueError, "integration 'test' field stale_running_timeout_minutes must not be null"
+        ):
+            load_integration_config("test", path=path)
+
+    def test_null_integrations_block_fails_with_context(self) -> None:
+        path = self._write_config(
+            """
+integrations:
+"""
+        )
+
+        with self.assertRaisesRegex(ValueError, "integration config field integrations must be a mapping"):
+            load_integration_config("test", path=path)
+
     def _write_config(self, contents: str) -> Path:
         directory = TemporaryDirectory()
         self.addCleanup(directory.cleanup)

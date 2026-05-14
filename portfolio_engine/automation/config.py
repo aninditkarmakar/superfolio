@@ -12,6 +12,8 @@ def load_integration_config(integration_key: str, path: Path = CONFIG_PATH) -> I
     key = integration_key.strip().lower()
     data = _load_simple_yaml(path)
     integrations = data.get("integrations", {})
+    if not isinstance(integrations, dict):
+        raise ValueError("integration config field integrations must be a mapping")
     raw = integrations.get(key)
     if raw is None:
         raise ValueError(f"unknown integration: {integration_key}")
@@ -35,15 +37,16 @@ def load_integration_config(integration_key: str, path: Path = CONFIG_PATH) -> I
     if invalid_modes:
         raise ValueError(f"integration '{key}' has unsupported modes: {', '.join(invalid_modes)}")
     required_env_keys = _string_tuple_field(key, raw, "required_env_keys")
+    stale_running_timeout_minutes = _int_field(key, raw, "stale_running_timeout_minutes")
 
     return IntegrationConfig(
         integration_key=key,
-        brokerage_code=str(raw["brokerage_code"]),
-        source_type=str(raw["source_type"]),
-        adapter_key=str(raw["adapter_key"]),
+        brokerage_code=_string_field(key, raw, "brokerage_code"),
+        source_type=_string_field(key, raw, "source_type"),
+        adapter_key=_string_field(key, raw, "adapter_key"),
         supported_modes=supported_modes,
         required_env_keys=required_env_keys,
-        stale_running_timeout_minutes=int(raw["stale_running_timeout_minutes"]),
+        stale_running_timeout_minutes=stale_running_timeout_minutes,
     )
 
 
@@ -58,6 +61,20 @@ def _string_tuple_field(key: str, raw: dict[object, object], field: str) -> tupl
     if not isinstance(value, list):
         raise ValueError(f"integration '{key}' field {field} must be a list")
     return tuple(str(item) for item in value)
+
+
+def _string_field(key: str, raw: dict[object, object], field: str) -> str:
+    value = raw[field]
+    if value is None:
+        raise ValueError(f"integration '{key}' field {field} must not be null")
+    return str(value)
+
+
+def _int_field(key: str, raw: dict[object, object], field: str) -> int:
+    value = raw[field]
+    if value is None:
+        raise ValueError(f"integration '{key}' field {field} must not be null")
+    return int(value)
 
 
 def _load_simple_yaml(path: Path) -> dict[str, object]:
