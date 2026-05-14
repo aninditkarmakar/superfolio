@@ -13,6 +13,9 @@ SuperFolio uses PostgreSQL functions as the database mutation boundary for accou
 | `complete_ingestion_run(...)` | `public.complete_ingestion_run(...)` |
 | `bulk_ingest_cash_flows(...)` | `public.bulk_ingest_cash_flows(...)` |
 | `bulk_ingest_daily_nav_snapshots(...)` | `public.bulk_ingest_daily_nav_snapshots(...)` |
+| `create_portfolio(...)` | `public.create_portfolio(...)` |
+| `attach_portfolio_account(...)` | `public.attach_portfolio_account(...)` |
+| `create_portfolio_transfer_bridge(...)` | `public.create_portfolio_transfer_bridge(...)` |
 
 Use `connect_database()` to create the adapter from `DATABASE_URL` or an explicit database URL.
 
@@ -23,6 +26,14 @@ Use `connect_database()` to create the adapter from `DATABASE_URL` or an explici
 | `register_account(...)` | Registers an account or returns the existing account id when brokerage, external id, account type, and base currency match. |
 | `update_account_metadata(...)` | Updates display name and account type for an existing account. |
 | `set_account_active(...)` | Activates or deactivates an account without deleting history. |
+
+## Portfolio functions
+
+| Function | Purpose |
+| --- | --- |
+| `create_portfolio(...)` | Inserts a named portfolio with a reporting currency and returns the new id; returns the existing id if name and currency already match; raises an error if the name exists with a different reporting currency. |
+| `attach_portfolio_account(...)` | Attaches an existing registered brokerage account to a portfolio after validating that the account base currency matches the portfolio reporting currency. |
+| `create_portfolio_transfer_bridge(...)` | Adds an in-transit transfer bridge after validating portfolio membership, date order, currency, and overlapping bridge windows. |
 
 ## Ingestion run functions
 
