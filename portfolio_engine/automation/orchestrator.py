@@ -55,7 +55,7 @@ def run_automation(request: AutomationRunRequest, *, database) -> AutomationRunR
 
     try:
         _validate_request(request)
-    except (AutomationValidationError, ValueError, RuntimeError) as exc:
+    except (AutomationValidationError, ValueError) as exc:
         error_message = sanitize_error_message(str(exc))
         summary = build_parent_summary([], [])
         database.finalize_automation_job(
@@ -75,11 +75,20 @@ def run_automation(request: AutomationRunRequest, *, database) -> AutomationRunR
 
     # Task 11+ will implement target resolution and the account execution loop.
     summary = build_parent_summary([], [])
+    error_message = "target execution not implemented yet"
+    database.finalize_automation_job(
+        AutomationJobFinalize(
+            automation_job_id=job_id,
+            status="failed",
+            summary=summary,
+            error_message=error_message,
+        )
+    )
     return AutomationRunResult(
         automation_job_id=job_id,
         status="failed",
         summary=summary,
-        error_message="target execution not implemented yet",
+        error_message=error_message,
     )
 
 

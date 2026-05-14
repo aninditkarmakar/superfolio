@@ -357,6 +357,32 @@ class AutomationOrchestratorValidationTests(unittest.TestCase):
         self.assertEqual(result.automation_job_id, "job-uuid")
         self.assertEqual(len(db.created_jobs), 1)
 
+    def test_valid_request_finalizes_parent_job_as_failed_placeholder(self):
+        """Valid request (no validation error) must finalize parent job as failed (placeholder path).
+
+        The placeholder path must persist the job so no running-only state remains in the DB.
+        """
+        request = self._make_request(account_external_ids=("U100",))
+        db = FakeAutomationDatabase()
+        result = self._run(request, db)
+
+        self.assertEqual(len(db.finalized_jobs), 1, "placeholder path must finalize the parent job")
+        finalized = db.finalized_jobs[0]
+        self.assertEqual(finalized.status, "failed")
+        self.assertEqual(finalized.automation_job_id, "job-uuid")
+        self.assertEqual(finalized.error_message, "target execution not implemented yet")
+        self.assertIsInstance(finalized.summary, dict)
+
+    def test_validation_runtime_error_propagates(self):
+        """RuntimeError raised inside _validate_request must propagate, not be swallowed."""
+        from portfolio_engine.automation import orchestrator
+        request = self._make_request(account_external_ids=("U100",))
+        db = FakeAutomationDatabase()
+
+        with mock.patch.object(orchestrator, "_validate_request", side_effect=RuntimeError("internal")):
+            with self.assertRaises(RuntimeError):
+                self._run(request, db)
+
     def test_finalized_job_has_sanitized_summary(self):
         """Finalized failed jobs must include a privacy-safe summary dict."""
         request = self._make_request(account_external_ids=())
