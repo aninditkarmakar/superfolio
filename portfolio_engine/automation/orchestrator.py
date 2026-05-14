@@ -5,12 +5,19 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
+from portfolio_engine.automation.adapters import get_adapter
 from portfolio_engine.automation.config import load_integration_config
+from portfolio_engine.automation.ingestion import dry_run_payload
 from portfolio_engine.automation.sanitization import sanitize_error_message
 from portfolio_engine.automation.summary import build_parent_summary
 from portfolio_engine.automation.targets import AutomationValidationError, validate_target_inputs
 from portfolio_engine.automation.types import AutomationRunRequest, VALID_MODES, VALID_TARGET_TYPES
-from portfolio_engine.database import AutomationJobAccountAdd, AutomationJobFinalize, AutomationJobStart
+from portfolio_engine.database import (
+    AutomationJobAccountAdd,
+    AutomationJobAccountFinalize,
+    AutomationJobFinalize,
+    AutomationJobStart,
+)
 
 
 @dataclass
@@ -22,19 +29,24 @@ class AutomationRunResult:
     automation_job_account_ids: tuple[str, ...] = ()
 
 
-def run_automation(request: AutomationRunRequest, *, database) -> AutomationRunResult:
-    """Orchestrate an automation run: validate, persist, and (in future tasks) execute accounts.
+def run_automation(request: AutomationRunRequest, *, database, adapter=None) -> AutomationRunResult:
+    """Orchestrate an automation run: validate, persist, and execute accounts.
 
-    Steps performed in this slice (Task 11):
+    Steps performed:
     1. Load integration config (raises ValueError for unknown key — not persisted).
-    2. Mark stale running rows as failed using the config timeout.
-    3. Create the parent automation_jobs row (DB errors propagate — not caught here).
-    4. Validate the request; on failure, finalize parent as failed and return.
-    5. Resolve target accounts; empty resolved set is a preflight failure.
-    6. Insert automation_job_accounts child rows for each resolved account.
-    7. Return a placeholder result — account execution handled in Task 12+.
+    2. Resolve adapter from config if not provided.
+    3. Mark stale running rows as failed using the config timeout.
+    4. Create the parent automation_jobs row (DB errors propagate — not caught here).
+    5. Validate the request; on failure, finalize parent as failed and return.
+    6. Resolve target accounts; empty resolved set is a preflight failure.
+    7. Insert automation_job_accounts child rows for each resolved account.
+    8. Preflight-validate adapter config; on RuntimeError, finalize parent as failed and return.
+    9. Execute dry-run per account; finalize each child and then finalize the parent.
     """
     config = load_integration_config(request.integration_key)
+
+    if adapter is None:
+        adapter = get_adapter(config.adapter_key)
 
     stale_before = datetime.now(timezone.utc) - timedelta(
         minutes=config.stale_running_timeout_minutes
@@ -79,7 +91,7 @@ def run_automation(request: AutomationRunRequest, *, database) -> AutomationRunR
             error_message=error_message,
         )
 
-    child_ids: list[str] = []
+    child_pairs: list[tuple[str, Any]] = []
     try:
         for account in accounts:
             child_id = database.add_automation_job_account(
@@ -88,7 +100,7 @@ def run_automation(request: AutomationRunRequest, *, database) -> AutomationRunR
                     account_id=account.account_id,
                 )
             )
-            child_ids.append(child_id)
+            child_pairs.append((child_id, account))
     except Exception as exc:
         error_message = sanitize_error_message(str(exc))
         summary = build_parent_summary([], [])
@@ -102,22 +114,87 @@ def run_automation(request: AutomationRunRequest, *, database) -> AutomationRunR
         )
         raise
 
-    # Task 12+ will implement the account execution loop.
-    summary = build_parent_summary([], [])
-    error_message = "account execution not implemented yet"
-    database.finalize_automation_job(
-        AutomationJobFinalize(
+    child_ids = [cid for cid, _ in child_pairs]
+
+    try:
+        adapter.preflight_validate_config(config)
+    except RuntimeError as exc:
+        error_message = sanitize_error_message(str(exc))
+        summary = build_parent_summary([], [])
+        database.finalize_automation_job(
+            AutomationJobFinalize(
+                automation_job_id=job_id,
+                status="failed",
+                summary=summary,
+                error_message=error_message,
+            )
+        )
+        return AutomationRunResult(
             automation_job_id=job_id,
             status="failed",
             summary=summary,
             error_message=error_message,
+            automation_job_account_ids=tuple(child_ids),
+        )
+
+    child_statuses: list[str] = []
+    child_summaries: list[dict[str, Any]] = []
+
+    if request.mode == "dry-run":
+        for child_id, account in child_pairs:
+            database.mark_automation_job_account_running(child_id)
+            payload = adapter.fetch_payload(account, request, config)
+            child_summary = dry_run_payload(
+                payload.xml_text,
+                account_external_id=account.account_external_id,
+                start_date=str(request.requested_start_date),
+                end_date=str(request.requested_end_date),
+            )
+            database.finalize_automation_job_account(
+                AutomationJobAccountFinalize(
+                    automation_job_account_id=child_id,
+                    status="succeeded",
+                    ingestion_run_id=None,
+                    summary=child_summary,
+                    error_message=None,
+                )
+            )
+            child_statuses.append("succeeded")
+            child_summaries.append(child_summary)
+    else:
+        # Task 13 will implement load mode execution.
+        error_message = "load mode not implemented yet"
+        empty_summary = build_parent_summary([], [])
+        database.finalize_automation_job(
+            AutomationJobFinalize(
+                automation_job_id=job_id,
+                status="failed",
+                summary=empty_summary,
+                error_message=error_message,
+            )
+        )
+        return AutomationRunResult(
+            automation_job_id=job_id,
+            status="failed",
+            summary=empty_summary,
+            error_message=error_message,
+            automation_job_account_ids=tuple(child_ids),
+        )
+
+    parent_status = _derive_parent_status(child_statuses)
+    parent_summary = build_parent_summary(child_statuses, child_summaries)
+    database.finalize_automation_job(
+        AutomationJobFinalize(
+            automation_job_id=job_id,
+            status=parent_status,
+            summary=parent_summary,
+            error_message=None,
         )
     )
     return AutomationRunResult(
         automation_job_id=job_id,
-        status="failed",
-        summary=summary,
-        error_message=error_message,
+        status=parent_status,
+        summary=parent_summary,
         automation_job_account_ids=tuple(child_ids),
     )
 
@@ -155,3 +232,19 @@ def _validate_request(request: AutomationRunRequest) -> None:
         portfolio_name=request.portfolio_name,
         account_external_ids=request.account_external_ids,
     )
+
+
+def _derive_parent_status(child_statuses: list[str]) -> str:
+    """Derive the parent job status from the list of child account statuses.
+
+    succeeded         — all children succeeded
+    failed            — all children failed (or no children)
+    partially_succeeded — mixed results or any child partially_succeeded
+    """
+    if not child_statuses:
+        return "failed"
+    if all(s == "succeeded" for s in child_statuses):
+        return "succeeded"
+    if all(s == "failed" for s in child_statuses):
+        return "failed"
+    return "partially_succeeded"

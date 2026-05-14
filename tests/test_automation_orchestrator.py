@@ -189,6 +189,8 @@ class FakeAutomationDatabase:
         self.added_accounts: list = []
         self.portfolio_resolve_calls: list = []
         self.account_resolve_calls: list = []
+        self.running_children: list[str] = []
+        self.finalized_children: list = []
         self._event_log: list[str] = []
         self._raise_on_create = raise_on_create
         self._child_counter = 0
@@ -223,6 +225,30 @@ class FakeAutomationDatabase:
         child_id = f"child-{self._child_counter}"
         self.added_accounts.append((child_id, request))
         return child_id
+
+    def mark_automation_job_account_running(self, automation_job_account_id: str) -> str:
+        self._event_log.append(f"mark_running:{automation_job_account_id}")
+        self.running_children.append(automation_job_account_id)
+        return automation_job_account_id
+
+    def finalize_automation_job_account(self, request) -> str:
+        self._event_log.append(f"finalize_child:{request.automation_job_account_id}")
+        self.finalized_children.append(request)
+        return request.automation_job_account_id
+
+
+class FakeAdapter:
+    """Minimal in-memory fake broker adapter for testing dry-run orchestration."""
+
+    def preflight_validate_config(self, config) -> None:
+        return None
+
+    def fetch_payload(self, account, request, config):
+        from portfolio_engine.automation.types import BrokerPayload
+        return BrokerPayload(
+            xml_text="<FlexQueryResponse></FlexQueryResponse>",
+            source_name="fake.xml",
+        )
 
 
 class AutomationOrchestratorValidationTests(unittest.TestCase):
@@ -361,7 +387,8 @@ class AutomationOrchestratorValidationTests(unittest.TestCase):
         self.assertLessEqual(stale_before, after_call - expected_delta + timedelta(seconds=5))
 
     def test_valid_request_creates_and_returns_job_id(self):
-        """A valid request (with resolved accounts) must create one parent job, add child rows, and return its id."""
+        """A valid dry-run request (with resolved accounts) creates one parent job, adds child rows, returns its id."""
+        from portfolio_engine.automation.orchestrator import run_automation
         from portfolio_engine.database import AutomationAccountTarget
         request = self._make_request(account_external_ids=("U100",))
         db = FakeAutomationDatabase()
@@ -374,19 +401,19 @@ class AutomationOrchestratorValidationTests(unittest.TestCase):
                 display_name="Main",
             )
         ]
-        result = self._run(request, db)
+        result = run_automation(request, database=db, adapter=FakeAdapter())
 
         self.assertEqual(result.automation_job_id, "job-uuid")
         self.assertEqual(len(db.created_jobs), 1)
         self.assertEqual(len(db.added_accounts), 1, "child row must be created for the resolved account")
-        self.assertEqual(result.error_message, "account execution not implemented yet")
+        self.assertIsNone(result.error_message)
 
-    def test_valid_request_finalizes_parent_job_as_failed_placeholder(self):
-        """Valid request (no validation error) must finalize parent job as failed (placeholder path).
+    def test_valid_request_finalizes_parent_job_as_succeeded(self):
+        """Valid dry-run request (with resolved accounts) must finalize parent job as succeeded.
 
-        The placeholder path must persist the job so no running-only state remains in the DB.
-        After Task 11 child row creation the message updates to 'account execution not implemented yet'.
+        After Task 12 the dry-run execution loop runs and parent is finalized based on child statuses.
         """
+        from portfolio_engine.automation.orchestrator import run_automation
         from portfolio_engine.database import AutomationAccountTarget
         request = self._make_request(account_external_ids=("U100",))
         db = FakeAutomationDatabase()
@@ -399,13 +426,13 @@ class AutomationOrchestratorValidationTests(unittest.TestCase):
                 display_name="Main",
             )
         ]
-        result = self._run(request, db)
+        result = run_automation(request, database=db, adapter=FakeAdapter())
 
-        self.assertEqual(len(db.finalized_jobs), 1, "placeholder path must finalize the parent job")
+        self.assertEqual(len(db.finalized_jobs), 1, "parent job must be finalized")
         finalized = db.finalized_jobs[0]
-        self.assertEqual(finalized.status, "failed")
+        self.assertEqual(finalized.status, "succeeded")
         self.assertEqual(finalized.automation_job_id, "job-uuid")
-        self.assertEqual(finalized.error_message, "account execution not implemented yet")
+        self.assertIsNone(finalized.error_message)
         self.assertIsInstance(finalized.summary, dict)
 
     def test_validation_runtime_error_propagates(self):
@@ -561,16 +588,18 @@ class AutomationOrchestratorTargetResolutionTests(unittest.TestCase):
         _child_id, child_req = db.added_accounts[0]
         self.assertEqual(child_req.automation_job_id, "job-uuid")
 
-    def test_placeholder_message_after_child_creation_is_updated(self):
-        """After child rows are created the placeholder error is 'account execution not implemented yet'."""
+    def test_child_rows_exist_before_dry_run_execution(self):
+        """After child rows are created, dry-run execution succeeds and child rows exist."""
+        from portfolio_engine.automation.orchestrator import run_automation
         request = self._make_accounts_request()
         db = FakeAutomationDatabase()
         db.account_targets = [self._make_account_target()]
 
-        result = self._run(request, db)
+        result = run_automation(request, database=db, adapter=FakeAdapter())
 
-        self.assertEqual(result.error_message, "account execution not implemented yet")
-        self.assertEqual(len(db.added_accounts), 1, "child rows must exist before placeholder finalize")
+        self.assertIsNone(result.error_message)
+        self.assertEqual(len(db.added_accounts), 1, "child rows must exist")
+        self.assertEqual(result.status, "succeeded")
 
     def test_multiple_resolved_accounts_each_get_child_row(self):
         """Each resolved account produces exactly one child row."""
@@ -617,6 +646,201 @@ class AutomationOrchestratorTargetResolutionTests(unittest.TestCase):
             self.assertIs(ctx.exception, original_exc)
         self.assertEqual(len(db.finalized_jobs), 1)
         self.assertEqual(db.finalized_jobs[0].status, "failed")
+
+
+class AutomationOrchestratorDryRunTests(unittest.TestCase):
+    """Tests for Task 12: per-account dry-run execution."""
+
+    def _run(self, request, db, adapter=None):
+        from portfolio_engine.automation.orchestrator import run_automation
+        if adapter is None:
+            adapter = FakeAdapter()
+        return run_automation(request, database=db, adapter=adapter)
+
+    def _make_request(self, **kwargs):
+        from portfolio_engine.automation.types import AutomationRunRequest
+        defaults = dict(
+            target_type="accounts",
+            integration_key="ibkr_flex_ws",
+            mode="dry-run",
+            requested_start_date=date(2024, 1, 1),
+            requested_end_date=date(2024, 1, 31),
+            account_external_ids=("U100",),
+        )
+        defaults.update(kwargs)
+        return AutomationRunRequest(**defaults)
+
+    def _make_account_target(self, *, account_id="account-uuid", external_id="U100"):
+        from portfolio_engine.database import AutomationAccountTarget
+        return AutomationAccountTarget(
+            account_id=account_id,
+            brokerage_code="IBKR",
+            account_external_id=external_id,
+            base_currency="USD",
+            display_name="Main",
+        )
+
+    def _make_db_with_accounts(self, *accounts):
+        db = FakeAutomationDatabase()
+        db.account_targets = list(accounts)
+        return db
+
+    def test_dry_run_finalizes_child_without_ingestion_run(self):
+        """Dry-run with one account: result.status succeeded, child final status succeeded, ingestion_run_id None."""
+        request = self._make_request()
+        db = self._make_db_with_accounts(self._make_account_target())
+
+        result = self._run(request, db)
+
+        self.assertEqual(result.status, "succeeded")
+        self.assertEqual(len(db.finalized_children), 1)
+        child_fin = db.finalized_children[0]
+        self.assertEqual(child_fin.status, "succeeded")
+        self.assertIsNone(child_fin.ingestion_run_id)
+
+    def test_dry_run_marks_child_running_before_finalize(self):
+        """mark_automation_job_account_running must be called before finalize_automation_job_account."""
+        request = self._make_request()
+        db = self._make_db_with_accounts(self._make_account_target())
+
+        self._run(request, db)
+
+        self.assertEqual(len(db.running_children), 1)
+        self.assertEqual(db.running_children[0], "child-1")
+        mark_idx = db._event_log.index("mark_running:child-1")
+        finalize_idx = db._event_log.index("finalize_child:child-1")
+        self.assertLess(mark_idx, finalize_idx)
+
+    def test_dry_run_parent_status_succeeded_when_all_children_succeeded(self):
+        """Parent final status is succeeded when all child accounts succeed."""
+        request = self._make_request(account_external_ids=("U100", "U200"))
+        db = self._make_db_with_accounts(
+            self._make_account_target(account_id="acct-1", external_id="U100"),
+            self._make_account_target(account_id="acct-2", external_id="U200"),
+        )
+
+        result = self._run(request, db)
+
+        self.assertEqual(result.status, "succeeded")
+        self.assertEqual(len(db.finalized_children), 2)
+        for child_fin in db.finalized_children:
+            self.assertEqual(child_fin.status, "succeeded")
+
+    def test_dry_run_parent_summary_aggregates_child_summaries(self):
+        """Parent summary must contain aggregated account_counts and record_counts."""
+        request = self._make_request()
+        db = self._make_db_with_accounts(self._make_account_target())
+
+        result = self._run(request, db)
+
+        self.assertIn("account_counts", result.summary)
+        self.assertIn("record_counts", result.summary)
+        self.assertEqual(result.summary["account_counts"]["total"], 1)
+        self.assertEqual(result.summary["account_counts"]["succeeded"], 1)
+
+    def test_dry_run_parent_finalizes_with_succeeded_status(self):
+        """Finalized parent job has status succeeded after all children succeed."""
+        request = self._make_request()
+        db = self._make_db_with_accounts(self._make_account_target())
+
+        self._run(request, db)
+
+        self.assertEqual(len(db.finalized_jobs), 1)
+        self.assertEqual(db.finalized_jobs[0].status, "succeeded")
+        self.assertIsNone(db.finalized_jobs[0].error_message)
+
+    def test_dry_run_child_finalize_has_no_ingestion_run(self):
+        """Child finalization in dry-run must have ingestion_run_id=None (no DB writes)."""
+        request = self._make_request()
+        db = self._make_db_with_accounts(self._make_account_target())
+
+        self._run(request, db)
+
+        self.assertEqual(len(db.finalized_children), 1)
+        self.assertIsNone(db.finalized_children[0].ingestion_run_id)
+
+    def test_preflight_is_called_before_account_loop(self):
+        """adapter.preflight_validate_config must be called (before account execution)."""
+        request = self._make_request()
+        db = self._make_db_with_accounts(self._make_account_target())
+
+        preflight_calls = []
+
+        class TrackingAdapter(FakeAdapter):
+            def preflight_validate_config(self, config) -> None:
+                preflight_calls.append(config)
+                return None
+
+        self._run(request, db, adapter=TrackingAdapter())
+
+        self.assertEqual(len(preflight_calls), 1)
+
+    def test_preflight_runtime_error_finalizes_parent_failed(self):
+        """RuntimeError from adapter.preflight_validate_config finalizes parent as failed; no child finalization."""
+        request = self._make_request()
+        db = self._make_db_with_accounts(self._make_account_target())
+
+        class FailPreflight(FakeAdapter):
+            def preflight_validate_config(self, config) -> None:
+                raise RuntimeError("missing required environment variables: IBKR_FLEX_TOKEN")
+
+        self._run(request, db, adapter=FailPreflight())
+
+        self.assertEqual(len(db.finalized_jobs), 1)
+        self.assertEqual(db.finalized_jobs[0].status, "failed")
+        self.assertEqual(len(db.finalized_children), 0, "no child should be finalized on preflight failure")
+        self.assertIsNotNone(db.finalized_jobs[0].error_message)
+
+    def test_preflight_failure_error_is_sanitized(self):
+        """Error message from preflight RuntimeError must be sanitized (no raw secrets)."""
+        request = self._make_request()
+        db = self._make_db_with_accounts(self._make_account_target())
+
+        class FailPreflight(FakeAdapter):
+            def preflight_validate_config(self, config) -> None:
+                raise RuntimeError("missing required environment variables: IBKR_FLEX_TOKEN")
+
+        self._run(request, db, adapter=FailPreflight())
+
+        error_msg = db.finalized_jobs[0].error_message
+        self.assertIsNotNone(error_msg)
+        self.assertNotIn("postgresql://", error_msg or "")
+
+    def test_get_adapter_used_when_adapter_is_none(self):
+        """When adapter=None, get_adapter is called with config.adapter_key."""
+        from portfolio_engine.automation.orchestrator import run_automation
+        from portfolio_engine.automation.types import AutomationRunRequest
+        request = self._make_request()
+        db = FakeAutomationDatabase()
+        # No accounts → fails before preflight; just verifies get_adapter is invoked
+        fake_adapter = FakeAdapter()
+        with mock.patch(
+            "portfolio_engine.automation.orchestrator.get_adapter",
+            return_value=fake_adapter,
+        ) as mock_get:
+            run_automation(request, database=db)
+        mock_get.assert_called_once()
+
+    def test_dry_run_child_summary_has_record_counts(self):
+        """Finalized child summary dict must contain record_counts key."""
+        request = self._make_request()
+        db = self._make_db_with_accounts(self._make_account_target())
+
+        self._run(request, db)
+
+        self.assertEqual(len(db.finalized_children), 1)
+        child_summary = db.finalized_children[0].summary
+        self.assertIsNotNone(child_summary)
+        self.assertIn("record_counts", child_summary)
+
+    def test_dry_run_result_has_child_ids(self):
+        """AutomationRunResult.automation_job_account_ids must include the child id."""
+        request = self._make_request()
+        db = self._make_db_with_accounts(self._make_account_target())
+
+        result = self._run(request, db)
+
+        self.assertIn("child-1", result.automation_job_account_ids)
 
 
 if __name__ == "__main__":
