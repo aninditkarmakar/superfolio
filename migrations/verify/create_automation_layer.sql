@@ -19,3 +19,13 @@ WHERE conname IN (
     'automation_jobs_manual_dates_required_check',
     'automation_job_accounts_unique_account'
 );
+
+SELECT 1 / (count(*) = 5)::int
+FROM pg_proc
+WHERE oid IN (
+    'public.create_automation_job(text,text,uuid,text,text,date,date)'::regprocedure,
+    'public.finalize_automation_job(uuid,text,jsonb,text)'::regprocedure,
+    'public.add_automation_job_account(uuid,uuid)'::regprocedure,
+    'public.mark_automation_job_account_running(uuid)'::regprocedure,
+    'public.finalize_automation_job_account(uuid,text,uuid,jsonb,text)'::regprocedure
+);

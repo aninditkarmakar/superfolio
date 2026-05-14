@@ -188,6 +188,30 @@ class MigrationContractTests(unittest.TestCase):
         self.assertIn("OR requested_end_date IS NULL", sql)
         self.assertIn("OR requested_start_date <= requested_end_date", sql)
 
+    def test_automation_layer_defines_lifecycle_functions(self) -> None:
+        sql = (MIGRATIONS_DIR / "deploy" / "create_automation_layer.sql").read_text(encoding="utf-8")
+
+        for name in (
+            "public.create_automation_job",
+            "public.finalize_automation_job",
+            "public.add_automation_job_account",
+            "public.mark_automation_job_account_running",
+            "public.finalize_automation_job_account",
+        ):
+            self.assertIn(f"CREATE FUNCTION {name}", sql)
+
+    def test_automation_layer_revert_drops_lifecycle_functions(self) -> None:
+        sql = (MIGRATIONS_DIR / "revert" / "create_automation_layer.sql").read_text(encoding="utf-8")
+
+        for name in (
+            "public.finalize_automation_job_account",
+            "public.mark_automation_job_account_running",
+            "public.add_automation_job_account",
+            "public.finalize_automation_job",
+            "public.create_automation_job",
+        ):
+            self.assertIn(f"DROP FUNCTION IF EXISTS {name}", sql)
+
 
 if __name__ == "__main__":
     unittest.main()

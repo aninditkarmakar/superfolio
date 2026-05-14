@@ -78,4 +78,174 @@ CREATE INDEX automation_job_accounts_account_status_idx
 CREATE INDEX automation_job_accounts_ingestion_run_id_idx
     ON public.automation_job_accounts (ingestion_run_id);
 
+CREATE FUNCTION public.create_automation_job(
+    p_trigger_type TEXT,
+    p_target_type TEXT,
+    p_portfolio_id UUID,
+    p_integration_key TEXT,
+    p_mode TEXT,
+    p_requested_start_date DATE,
+    p_requested_end_date DATE
+)
+RETURNS UUID
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    v_job_id UUID;
+    v_trigger_type TEXT;
+    v_target_type TEXT;
+    v_integration_key TEXT;
+    v_mode TEXT;
+BEGIN
+    v_trigger_type := lower(btrim(p_trigger_type));
+    v_target_type := lower(btrim(p_target_type));
+    v_integration_key := lower(btrim(p_integration_key));
+    v_mode := lower(btrim(p_mode));
+
+    IF v_trigger_type = '' OR v_target_type = '' OR v_integration_key = '' OR v_mode = '' THEN
+        RAISE EXCEPTION 'automation job trigger_type, target_type, integration_key, and mode must not be blank';
+    END IF;
+
+    INSERT INTO public.automation_jobs (
+        trigger_type,
+        target_type,
+        portfolio_id,
+        integration_key,
+        mode,
+        status,
+        requested_start_date,
+        requested_end_date
+    )
+    VALUES (
+        v_trigger_type,
+        v_target_type,
+        p_portfolio_id,
+        v_integration_key,
+        v_mode,
+        'running',
+        p_requested_start_date,
+        p_requested_end_date
+    )
+    RETURNING id INTO v_job_id;
+
+    RETURN v_job_id;
+END;
+$$;
+
+CREATE FUNCTION public.finalize_automation_job(
+    p_automation_job_id UUID,
+    p_status TEXT,
+    p_summary JSONB DEFAULT NULL,
+    p_error_message TEXT DEFAULT NULL
+)
+RETURNS UUID
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    v_job_id UUID;
+    v_status TEXT;
+BEGIN
+    v_status := lower(btrim(p_status));
+
+    UPDATE public.automation_jobs
+    SET status = v_status,
+        summary = p_summary,
+        error_message = NULLIF(btrim(p_error_message), ''),
+        completed_at = now()
+    WHERE id = p_automation_job_id
+      AND status IN ('pending', 'running')
+    RETURNING id INTO v_job_id;
+
+    IF v_job_id IS NULL THEN
+        RAISE EXCEPTION 'Unknown or already completed automation job id: %', p_automation_job_id;
+    END IF;
+
+    RETURN v_job_id;
+END;
+$$;
+
+CREATE FUNCTION public.add_automation_job_account(
+    p_automation_job_id UUID,
+    p_account_id UUID
+)
+RETURNS UUID
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    v_job_account_id UUID;
+BEGIN
+    INSERT INTO public.automation_job_accounts (
+        automation_job_id,
+        account_id,
+        status
+    )
+    VALUES (
+        p_automation_job_id,
+        p_account_id,
+        'pending'
+    )
+    RETURNING id INTO v_job_account_id;
+
+    RETURN v_job_account_id;
+END;
+$$;
+
+CREATE FUNCTION public.mark_automation_job_account_running(
+    p_automation_job_account_id UUID
+)
+RETURNS UUID
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    v_job_account_id UUID;
+BEGIN
+    UPDATE public.automation_job_accounts
+    SET status = 'running',
+        started_at = now()
+    WHERE id = p_automation_job_account_id
+      AND status = 'pending'
+    RETURNING id INTO v_job_account_id;
+
+    IF v_job_account_id IS NULL THEN
+        RAISE EXCEPTION 'Unknown or non-pending automation job account id: %', p_automation_job_account_id;
+    END IF;
+
+    RETURN v_job_account_id;
+END;
+$$;
+
+CREATE FUNCTION public.finalize_automation_job_account(
+    p_automation_job_account_id UUID,
+    p_status TEXT,
+    p_ingestion_run_id UUID DEFAULT NULL,
+    p_summary JSONB DEFAULT NULL,
+    p_error_message TEXT DEFAULT NULL
+)
+RETURNS UUID
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    v_job_account_id UUID;
+    v_status TEXT;
+BEGIN
+    v_status := lower(btrim(p_status));
+
+    UPDATE public.automation_job_accounts
+    SET status = v_status,
+        ingestion_run_id = p_ingestion_run_id,
+        summary = p_summary,
+        error_message = NULLIF(btrim(p_error_message), ''),
+        completed_at = now()
+    WHERE id = p_automation_job_account_id
+      AND status IN ('pending', 'running')
+    RETURNING id INTO v_job_account_id;
+
+    IF v_job_account_id IS NULL THEN
+        RAISE EXCEPTION 'Unknown or already completed automation job account id: %', p_automation_job_account_id;
+    END IF;
+
+    RETURN v_job_account_id;
+END;
+$$;
+
 COMMIT;
