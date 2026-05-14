@@ -148,6 +148,25 @@ class MigrationContractTests(unittest.TestCase):
         ):
             self.assertTrue(path.exists(), f"missing {path}")
 
+    def test_automation_layer_defines_parent_and_child_tables(self) -> None:
+        sql = (MIGRATIONS_DIR / "deploy" / "create_automation_layer.sql").read_text(encoding="utf-8")
+
+        self.assertIn("CREATE TABLE public.automation_jobs", sql)
+        self.assertIn("CREATE TABLE public.automation_job_accounts", sql)
+        self.assertIn("summary JSONB", sql)
+        self.assertIn("automation_jobs_target_type_check", sql)
+        self.assertIn("automation_jobs_portfolio_target_check", sql)
+        self.assertIn("automation_jobs_manual_dates_required_check", sql)
+        self.assertIn("automation_job_accounts_unique_account", sql)
+
+    def test_automation_layer_revert_drops_child_before_parent(self) -> None:
+        sql = (MIGRATIONS_DIR / "revert" / "create_automation_layer.sql").read_text(encoding="utf-8")
+
+        child_pos = sql.index("DROP TABLE IF EXISTS public.automation_job_accounts")
+        parent_pos = sql.index("DROP TABLE IF EXISTS public.automation_jobs")
+
+        self.assertLess(child_pos, parent_pos)
+
 
 if __name__ == "__main__":
     unittest.main()
