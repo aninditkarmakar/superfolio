@@ -253,6 +253,20 @@ class MigrationContractTests(unittest.TestCase):
         self.assertIn("to_regprocedure('public.fail_stale_automation_runs(timestamptz,text)')", sql)
         self.assertIn("SELECT 1 / (count(*) = 3)::int", sql)
 
+    def test_automation_layer_target_resolution_requires_brokerage_code(self) -> None:
+        sql = (MIGRATIONS_DIR / "deploy" / "create_automation_layer.sql").read_text(encoding="utf-8")
+
+        self.assertEqual(2, sql.count("p_brokerage_code IS NULL OR btrim(p_brokerage_code) = ''"))
+        self.assertIn("automation target resolution requires brokerage_code", sql)
+
+    def test_automation_layer_stale_cleanup_fails_pending_children_of_stale_parents(self) -> None:
+        sql = (MIGRATIONS_DIR / "deploy" / "create_automation_layer.sql").read_text(encoding="utf-8")
+
+        self.assertIn("status IN ('pending', 'running')", sql)
+        self.assertIn("automation_job_id IN (", sql)
+        self.assertIn("FROM public.automation_jobs", sql)
+        self.assertIn("started_at < p_stale_before", sql)
+
 
 if __name__ == "__main__":
     unittest.main()

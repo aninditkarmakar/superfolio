@@ -274,6 +274,10 @@ BEGIN
         RAISE EXCEPTION 'target_type=portfolio requires portfolio_name';
     END IF;
 
+    IF p_brokerage_code IS NULL OR btrim(p_brokerage_code) = '' THEN
+        RAISE EXCEPTION 'automation target resolution requires brokerage_code';
+    END IF;
+
     RETURN QUERY
     SELECT a.id, b.code::TEXT, a.external_id::TEXT, a.base_currency::TEXT, a.display_name::TEXT
     FROM public.portfolio_accounts pa
@@ -303,6 +307,10 @@ RETURNS TABLE (
 LANGUAGE plpgsql
 AS $$
 BEGIN
+    IF p_brokerage_code IS NULL OR btrim(p_brokerage_code) = '' THEN
+        RAISE EXCEPTION 'automation target resolution requires brokerage_code';
+    END IF;
+
     IF p_account_external_ids IS NULL OR array_length(p_account_external_ids, 1) IS NULL THEN
         RAISE EXCEPTION 'target_type=accounts requires account_external_ids';
     END IF;
@@ -334,8 +342,16 @@ BEGIN
     SET status = 'failed',
         error_message = NULLIF(btrim(p_error_message), ''),
         completed_at = now()
-    WHERE status = 'running'
-      AND started_at < p_stale_before;
+    WHERE status IN ('pending', 'running')
+      AND (
+          started_at < p_stale_before
+          OR automation_job_id IN (
+              SELECT id
+              FROM public.automation_jobs
+              WHERE status = 'running'
+                AND started_at < p_stale_before
+          )
+      );
     GET DIAGNOSTICS v_child_count = ROW_COUNT;
 
     UPDATE public.automation_jobs
