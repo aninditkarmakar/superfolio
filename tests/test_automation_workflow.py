@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from pathlib import Path
 import unittest
+import yaml
 
 WORKFLOW_PATH = Path(".github/workflows/manual-ingestion.yml")
 
@@ -10,6 +11,21 @@ WORKFLOW_PATH = Path(".github/workflows/manual-ingestion.yml")
 class AutomationWorkflowTests(unittest.TestCase):
     def _text(self) -> str:
         return WORKFLOW_PATH.read_text(encoding="utf-8")
+
+    def _parsed(self) -> dict:
+        return yaml.safe_load(self._text())
+
+    def _workflow_inputs(self) -> dict:
+        # PyYAML parses bare 'on' as Python True
+        return self._parsed()[True]["workflow_dispatch"]["inputs"]
+
+    def _ingestion_step(self) -> dict:
+        wf = self._parsed()
+        steps = wf["jobs"]["ingest"]["steps"]
+        for step in steps:
+            if step.get("id") == "ingestion":
+                return step
+        raise AssertionError("Step with id='ingestion' not found")
 
     def test_manual_workflow_exists_without_schedule(self) -> None:
         self.assertTrue(WORKFLOW_PATH.exists())
@@ -39,16 +55,59 @@ class AutomationWorkflowTests(unittest.TestCase):
             self.assertIn(key + ":", text, msg=f"Optional input '{key}' missing")
 
     def test_required_inputs_marked_required(self) -> None:
-        text = self._text()
-        # start_date and end_date must be required
-        self.assertIn("required: true", text)
+        inputs = self._workflow_inputs()
+        for key in ("target_type", "mode", "start_date", "end_date"):
+            self.assertTrue(
+                inputs[key].get("required"),
+                msg=f"Input '{key}' should have required: true",
+            )
 
     def test_optional_inputs_not_required(self) -> None:
-        text = self._text()
-        # portfolio_name and account_external_ids must NOT be required: true
-        # We verify the word "required: false" or absence of required:true near them.
-        # Simple check: the workflow must declare required: false for at least some inputs.
-        self.assertIn("required: false", text)
+        inputs = self._workflow_inputs()
+        for key in ("portfolio_name", "account_external_ids"):
+            self.assertFalse(
+                inputs[key].get("required"),
+                msg=f"Input '{key}' should not be required (required: true absent/false)",
+            )
+
+    # --- Issue 2: no raw ${{ inputs.* }} interpolation inside run blocks ---
+    def test_no_raw_input_interpolation_in_run(self) -> None:
+        run_script = self._ingestion_step().get("run", "")
+        self.assertNotIn(
+            "${{ inputs.",
+            run_script,
+            "Raw ${{ inputs.* }} found in run block — shell injection risk",
+        )
+
+    # --- Issue 2: all inputs bound to step-level env vars ---
+    def test_inputs_bound_to_step_env(self) -> None:
+        env = self._ingestion_step().get("env", {})
+        expected = (
+            "TARGET_TYPE",
+            "INTEGRATION",
+            "MODE",
+            "START_DATE",
+            "END_DATE",
+            "PORTFOLIO_NAME",
+            "ACCOUNT_EXTERNAL_IDS",
+        )
+        for var in expected:
+            self.assertIn(var, env, msg=f"Step env var '{var}' not bound")
+
+    # --- Issue 3: EXTRA_FLAGS uses a bash array, not a plain string ---
+    def test_extra_flags_uses_bash_array(self) -> None:
+        run_script = self._ingestion_step().get("run", "")
+        self.assertIn("EXTRA_FLAGS=()", run_script, "EXTRA_FLAGS must be initialised as an array")
+        self.assertIn("EXTRA_FLAGS+=(", run_script, "EXTRA_FLAGS must be appended to with EXTRA_FLAGS+=()")
+        self.assertIn('"${EXTRA_FLAGS[@]}"', run_script, "EXTRA_FLAGS must be expanded as array")
+
+    # --- Issue 1: summary written unconditionally via set +e / set -e ---
+    def test_summary_written_unconditionally(self) -> None:
+        run_script = self._ingestion_step().get("run", "")
+        self.assertIn("set +e", run_script, "set +e required before pipeline to survive CLI failure")
+        self.assertIn("set -e", run_script, "set -e required after pipeline capture")
+        self.assertIn("PIPESTATUS[0]", run_script, "CLI exit code must be captured via PIPESTATUS[0]")
+
 
     def test_cli_flags_mapped(self) -> None:
         text = self._text()

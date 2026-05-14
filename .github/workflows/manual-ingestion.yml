@@ -65,39 +65,48 @@ jobs:
 
       - name: Run automated ingestion
         id: ingestion
+        env:
+          TARGET_TYPE: ${{ inputs.target_type }}
+          INTEGRATION: ${{ inputs.integration }}
+          MODE: ${{ inputs.mode }}
+          START_DATE: ${{ inputs.start_date }}
+          END_DATE: ${{ inputs.end_date }}
+          PORTFOLIO_NAME: ${{ inputs.portfolio_name }}
+          ACCOUNT_EXTERNAL_IDS: ${{ inputs.account_external_ids }}
         run: |
-          EXTRA_FLAGS=""
-          if [ -n "${{ inputs.portfolio_name }}" ]; then
-            EXTRA_FLAGS="$EXTRA_FLAGS --portfolio-name ${{ inputs.portfolio_name }}"
+          EXTRA_FLAGS=()
+          if [ -n "$PORTFOLIO_NAME" ]; then
+            EXTRA_FLAGS+=(--portfolio-name "$PORTFOLIO_NAME")
           fi
-          if [ -n "${{ inputs.account_external_ids }}" ]; then
-            EXTRA_FLAGS="$EXTRA_FLAGS --account-external-ids ${{ inputs.account_external_ids }}"
+          if [ -n "$ACCOUNT_EXTERNAL_IDS" ]; then
+            EXTRA_FLAGS+=(--account-external-ids "$ACCOUNT_EXTERNAL_IDS")
           fi
 
+          set +e
           python scripts/run_automated_ingestion.py \
-            --target-type ${{ inputs.target_type }} \
-            --integration ${{ inputs.integration }} \
-            --mode ${{ inputs.mode }} \
-            --start-date ${{ inputs.start_date }} \
-            --end-date ${{ inputs.end_date }} \
-            $EXTRA_FLAGS 2>&1 | tee ingestion_output.txt
+            --target-type "$TARGET_TYPE" \
+            --integration "$INTEGRATION" \
+            --mode "$MODE" \
+            --start-date "$START_DATE" \
+            --end-date "$END_DATE" \
+            "${EXTRA_FLAGS[@]}" 2>&1 | tee ingestion_output.txt
+          CLI_EXIT=${PIPESTATUS[0]}
+          set -e
 
-          EXIT_CODE=${PIPESTATUS[0]}
-
-          # Publish output to step summary
+          # Publish output to step summary (runs whether CLI succeeded or failed)
           echo "## Ingestion Run Summary" >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
           echo "| Parameter | Value |" >> "$GITHUB_STEP_SUMMARY"
           echo "|-----------|-------|" >> "$GITHUB_STEP_SUMMARY"
-          echo "| target_type | ${{ inputs.target_type }} |" >> "$GITHUB_STEP_SUMMARY"
-          echo "| integration | ${{ inputs.integration }} |" >> "$GITHUB_STEP_SUMMARY"
-          echo "| mode | ${{ inputs.mode }} |" >> "$GITHUB_STEP_SUMMARY"
-          echo "| start_date | ${{ inputs.start_date }} |" >> "$GITHUB_STEP_SUMMARY"
-          echo "| end_date | ${{ inputs.end_date }} |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| target_type | $TARGET_TYPE |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| integration | $INTEGRATION |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| mode | $MODE |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| start_date | $START_DATE |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| end_date | $END_DATE |" >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
           echo "### CLI Output" >> "$GITHUB_STEP_SUMMARY"
           echo '```' >> "$GITHUB_STEP_SUMMARY"
           cat ingestion_output.txt >> "$GITHUB_STEP_SUMMARY"
           echo '```' >> "$GITHUB_STEP_SUMMARY"
 
-          exit $EXIT_CODE
+          exit $CLI_EXIT
