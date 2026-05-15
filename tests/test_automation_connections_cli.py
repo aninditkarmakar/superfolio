@@ -41,11 +41,14 @@ class ConnectionCliTests(unittest.TestCase):
                 "set-credential",
                 "--connection-id", "connection-uuid",
                 "--credential-name", "flex_token",
-                "--value", "plain-token",
+                "--value-from-env", "MY_TOKEN",
             ],
             stdout=StringIO(),
             database_connector=lambda: FakeDatabase(),
-            environ={"SUPERFOLIO_CREDENTIAL_MASTER_KEY": Fernet.generate_key().decode("ascii")},
+            environ={
+                "SUPERFOLIO_CREDENTIAL_MASTER_KEY": Fernet.generate_key().decode("ascii"),
+                "MY_TOKEN": "plain-token",
+            },
         )
 
         self.assertEqual(code, 0)
@@ -82,11 +85,14 @@ class ConnectionCliTests(unittest.TestCase):
                 "set-credential",
                 "--connection-id", "conn-id",
                 "--credential-name", "flex_token",
-                "--value", "secret",
+                "--value-from-env", "MY_SECRET",
             ],
             stdout=stdout,
             database_connector=lambda: FakeDatabase(),
-            environ={"SUPERFOLIO_CREDENTIAL_MASTER_KEY": Fernet.generate_key().decode("ascii")},
+            environ={
+                "SUPERFOLIO_CREDENTIAL_MASTER_KEY": Fernet.generate_key().decode("ascii"),
+                "MY_SECRET": "secret",
+            },
         )
 
         self.assertEqual(code, 0)
@@ -104,12 +110,15 @@ class ConnectionCliTests(unittest.TestCase):
                 "set-credential",
                 "--connection-id", "conn-id",
                 "--credential-name", "flex_token",
-                "--value", "my-super-secret-token",
+                "--value-from-env", "MY_SUPER_SECRET",
             ],
             stdout=stdout,
             stderr=stderr,
             database_connector=lambda: FakeDatabase(),
-            environ={"SUPERFOLIO_CREDENTIAL_MASTER_KEY": Fernet.generate_key().decode("ascii")},
+            environ={
+                "SUPERFOLIO_CREDENTIAL_MASTER_KEY": Fernet.generate_key().decode("ascii"),
+                "MY_SUPER_SECRET": "my-super-secret-token",
+            },
         )
 
         combined = stdout.getvalue() + stderr.getvalue()
@@ -126,12 +135,12 @@ class ConnectionCliTests(unittest.TestCase):
                 "set-credential",
                 "--connection-id", "conn-id",
                 "--credential-name", "flex_token",
-                "--value", "secret",
+                "--value-from-env", "MY_SECRET",
             ],
             stdout=StringIO(),
             stderr=stderr,
             database_connector=lambda: FakeDatabase(),
-            environ={},
+            environ={"MY_SECRET": "secret"},
         )
 
         self.assertEqual(code, 1)
@@ -150,11 +159,14 @@ class ConnectionCliTests(unittest.TestCase):
                 "set-credential",
                 "--connection-id", "conn-id",
                 "--credential-name", "flex_token",
-                "--value", "secret",
+                "--value-from-env", "MY_SECRET",
             ],
             stdout=StringIO(),
             database_connector=lambda: FakeDatabase(),
-            environ={"SUPERFOLIO_CREDENTIAL_MASTER_KEY": Fernet.generate_key().decode("ascii")},
+            environ={
+                "SUPERFOLIO_CREDENTIAL_MASTER_KEY": Fernet.generate_key().decode("ascii"),
+                "MY_SECRET": "secret",
+            },
         )
 
         self.assertEqual(captured[0].encryption_key_id, "v1")
@@ -394,7 +406,113 @@ class ConnectionCliTests(unittest.TestCase):
 
         self.assertEqual(code, 1)
 
-    def test_database_error_returns_1_with_sanitized_message(self) -> None:
+    def test_set_credential_rejects_value_flag(self) -> None:
+        """--value must not be accepted; only --value-from-env is allowed."""
+        class FakeDatabase:
+            def set_integration_credential(self, request):
+                return "cred-uuid"
+
+        stderr = StringIO()
+        code = run(
+            [
+                "set-credential",
+                "--connection-id", "conn-id",
+                "--credential-name", "flex_token",
+                "--value", "some-plaintext",
+            ],
+            stdout=StringIO(),
+            stderr=stderr,
+            database_connector=lambda: FakeDatabase(),
+            environ={"SUPERFOLIO_CREDENTIAL_MASTER_KEY": Fernet.generate_key().decode("ascii")},
+        )
+
+        self.assertEqual(code, 1)
+
+    def test_set_credential_missing_value_env_var_returns_1(self) -> None:
+        """Return 1 with actionable error when the named env var is absent."""
+        class FakeDatabase:
+            def set_integration_credential(self, request):
+                return "cred-uuid"
+
+        stderr = StringIO()
+        code = run(
+            [
+                "set-credential",
+                "--connection-id", "conn-id",
+                "--credential-name", "flex_token",
+                "--value-from-env", "MISSING_VAR",
+            ],
+            stdout=StringIO(),
+            stderr=stderr,
+            database_connector=lambda: FakeDatabase(),
+            environ={"SUPERFOLIO_CREDENTIAL_MASTER_KEY": Fernet.generate_key().decode("ascii")},
+        )
+
+        self.assertEqual(code, 1)
+        err = stderr.getvalue()
+        self.assertIn("MISSING_VAR", err)
+
+    def test_set_credential_blank_value_env_var_returns_1(self) -> None:
+        """Return 1 with actionable error when the named env var is blank."""
+        class FakeDatabase:
+            def set_integration_credential(self, request):
+                return "cred-uuid"
+
+        stderr = StringIO()
+        code = run(
+            [
+                "set-credential",
+                "--connection-id", "conn-id",
+                "--credential-name", "flex_token",
+                "--value-from-env", "BLANK_VAR",
+            ],
+            stdout=StringIO(),
+            stderr=stderr,
+            database_connector=lambda: FakeDatabase(),
+            environ={
+                "SUPERFOLIO_CREDENTIAL_MASTER_KEY": Fernet.generate_key().decode("ascii"),
+                "BLANK_VAR": "",
+            },
+        )
+
+        self.assertEqual(code, 1)
+        err = stderr.getvalue()
+        self.assertIn("BLANK_VAR", err)
+
+    def test_assign_accounts_partial_failure_identifies_account(self) -> None:
+        """When the second account fails, stderr identifies that account and exit code is 1."""
+        assigned = []
+
+        class FakeDatabase:
+            def set_account_integration_assignment(self, request):
+                if request.account_external_id == "U22222":
+                    raise RuntimeError("db error")
+                assigned.append(request.account_external_id)
+                return "assignment-id"
+
+        stdout = StringIO()
+        stderr = StringIO()
+        code = run(
+            [
+                "assign-accounts",
+                "--connection-id", "conn-id",
+                "--brokerage-code", "IBKR",
+                "--account-external-id", "U11111",
+                "--account-external-id", "U22222",
+            ],
+            stdout=stdout,
+            stderr=stderr,
+            database_connector=lambda: FakeDatabase(),
+            environ={},
+        )
+
+        self.assertEqual(code, 1)
+        # First account was assigned successfully
+        self.assertIn("U11111", assigned)
+        # Stderr identifies the failing account
+        self.assertIn("U22222", stderr.getvalue())
+        # Stderr does not contain raw exception message
+        self.assertNotIn("db error", stderr.getvalue())
         class FakeDatabase:
             def create_integration_connection(self, request):
                 raise RuntimeError("connection string: postgresql://user:secret@host/db")

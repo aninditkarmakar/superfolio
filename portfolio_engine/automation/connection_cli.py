@@ -129,9 +129,15 @@ def _cmd_set_credential(
     parser = argparse.ArgumentParser(add_help=False)
     parser.add_argument("--connection-id", required=True)
     parser.add_argument("--credential-name", required=True)
-    parser.add_argument("--value", required=True)
+    parser.add_argument("--value-from-env", required=True, dest="value_from_env",
+                        metavar="VARNAME", help="Name of env var containing the plaintext credential")
     ns = _parse_args(parser, args, stderr=stderr)
     if ns is None:
+        return 1
+
+    plaintext = environ.get(ns.value_from_env)
+    if not plaintext:
+        print(f"error: env var {ns.value_from_env!r} is missing or blank", file=stderr)
         return 1
 
     raw_key = environ.get("SUPERFOLIO_CREDENTIAL_MASTER_KEY")
@@ -141,7 +147,7 @@ def _cmd_set_credential(
         print(f"error: master key error: {exc}", file=stderr)
         return 1
 
-    ciphertext = encrypt_secret(ns.value, master_key)
+    ciphertext = encrypt_secret(plaintext, master_key)
     request = IntegrationCredentialSet(
         connection_id=ns.connection_id,
         credential_name=ns.credential_name,
@@ -221,17 +227,22 @@ def _cmd_assign_accounts(args: list[str], *, stdout: Any, stderr: Any, database_
 
     try:
         db = database_connector()
-        for external_id in ns.account_external_ids:
-            request = AccountIntegrationAssignmentSet(
-                brokerage_code=ns.brokerage_code,
-                account_external_id=external_id,
-                connection_id=ns.connection_id,
-            )
-            assignment_id = db.set_account_integration_assignment(request)
-            print(f"assigned account {external_id}: {assignment_id}", file=stdout)
     except Exception:
         print(_SANITIZED_ERROR, file=stderr)
         return 1
+
+    for external_id in ns.account_external_ids:
+        request = AccountIntegrationAssignmentSet(
+            brokerage_code=ns.brokerage_code,
+            account_external_id=external_id,
+            connection_id=ns.connection_id,
+        )
+        try:
+            assignment_id = db.set_account_integration_assignment(request)
+            print(f"assigned account {external_id}: {assignment_id}", file=stdout)
+        except Exception:
+            print(f"error: failed to assign account {external_id!r}: {_SANITIZED_ERROR}", file=stderr)
+            return 1
 
     return 0
 
