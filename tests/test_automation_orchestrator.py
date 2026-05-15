@@ -3674,6 +3674,89 @@ class CredentialLoadingOrchestratorTests(unittest.TestCase):
 
         self.assertEqual(result.status, "failed")
 
+    def _run_without_master_key(self, request, db, adapter=None):
+        """Run automation with the master key env var absent."""
+        from portfolio_engine.automation.orchestrator import run_automation
+        if adapter is None:
+            adapter = FakeConnectionAdapter(payload_by_feed={"daily": SAMPLE_XML})
+        env = {k: v for k, v in os.environ.items() if k != "SUPERFOLIO_CREDENTIAL_MASTER_KEY"}
+        with mock.patch.dict(os.environ, env, clear=True):
+            return run_automation(request, database=db, adapter=adapter)
+
+    def test_missing_master_key_fails_all_connections_with_distinct_category(self) -> None:
+        """Missing SUPERFOLIO_CREDENTIAL_MASTER_KEY fails all connections as credential_master_key_error."""
+        db = self._make_db_with_two_connections()
+        adapter = FakeConnectionAdapter(payload_by_feed={"daily": SAMPLE_XML})
+
+        result = self._run_without_master_key(
+            _make_accounts_run_request(account_external_ids=("U100", "U200")),
+            db=db, adapter=adapter,
+        )
+
+        self.assertEqual(result.status, "failed")
+        child_1 = self._find_child(db, "child-1")
+        self.assertIsNotNone(child_1)
+        self.assertEqual(child_1.status, "failed")
+        self.assertEqual(child_1.summary["error_category"], "credential_master_key_error")
+        # Must not be misreported as per-connection ciphertext corruption
+        self.assertNotEqual(child_1.summary["error_category"], "credential_decryption_failed")
+        child_2 = self._find_child(db, "child-2")
+        self.assertIsNotNone(child_2)
+        self.assertEqual(child_2.status, "failed")
+        self.assertEqual(child_2.summary["error_category"], "credential_master_key_error")
+        # Error messages must not contain any key material
+        for finalized in db.finalized_children:
+            self.assertNotIn("SUPERFOLIO", finalized.error_message or "")
+
+    def test_malformed_master_key_fails_all_connections_with_distinct_category(self) -> None:
+        """Malformed (non-Fernet) master key fails all connections as credential_master_key_error."""
+        db = self._make_db_with_two_connections()
+        adapter = FakeConnectionAdapter(payload_by_feed={"daily": SAMPLE_XML})
+
+        result = self._run(
+            _make_accounts_run_request(account_external_ids=("U100", "U200")),
+            db=db, adapter=adapter,
+            master_key="this-is-not-a-valid-fernet-key",
+        )
+
+        self.assertEqual(result.status, "failed")
+        child_1 = self._find_child(db, "child-1")
+        self.assertIsNotNone(child_1)
+        self.assertEqual(child_1.status, "failed")
+        self.assertEqual(child_1.summary["error_category"], "credential_master_key_error")
+        self.assertNotEqual(child_1.summary["error_category"], "credential_decryption_failed")
+        child_2 = self._find_child(db, "child-2")
+        self.assertIsNotNone(child_2)
+        self.assertEqual(child_2.status, "failed")
+        self.assertEqual(child_2.summary["error_category"], "credential_master_key_error")
+        # Error messages must not leak the malformed key value
+        for finalized in db.finalized_children:
+            self.assertNotIn("this-is-not-a-valid-fernet-key", finalized.error_message or "")
+
+    def test_master_key_error_does_not_mask_tampered_ciphertext_category(self) -> None:
+        """Tampered ciphertext with a valid key still yields credential_decryption_failed."""
+        db = FakeAutomationDatabase()
+        db.connection_targets = [
+            _make_connection_target("account-1", "U100", connection_id="connection-1"),
+        ]
+        db.connection_credentials["connection-1"] = {
+            "flex_token": b"tampered-garbage-bytes",
+        }
+        db.connection_feeds["connection-1"] = [_make_feed_record("daily")]
+        adapter = FakeConnectionAdapter(payload_by_feed={"daily": SAMPLE_XML})
+
+        result = self._run(
+            _make_accounts_run_request(account_external_ids=("U100",)),
+            db=db, adapter=adapter,
+        )
+
+        child_1 = self._find_child(db, "child-1")
+        self.assertIsNotNone(child_1)
+        self.assertEqual(child_1.status, "failed")
+        self.assertEqual(child_1.summary["error_category"], "credential_decryption_failed")
+        # Tampered ciphertext must NOT be reported as a master key config failure
+        self.assertNotEqual(child_1.summary["error_category"], "credential_master_key_error")
+
 
 if __name__ == "__main__":
     unittest.main()

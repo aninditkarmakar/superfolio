@@ -232,17 +232,32 @@ def run_automation(request: AutomationRunRequest, *, database, adapter=None) -> 
     )
 
     if adapter_supports_connection_preflight:
+        # Validate the master key once before iterating connection groups — it is a
+        # system-wide configuration value that applies to all connections equally.
+        try:
+            master_key = load_master_key(raw_master_key)
+        except CredentialMasterKeyError:
+            for group_pairs in connection_groups.values():
+                _fail_group(
+                    group_pairs, "credential_master_key_error",
+                    database, connection_failed_statuses, connection_failed_summaries,
+                )
+            master_key = None  # type: ignore[assignment]
+
         for connection_id, group_pairs in connection_groups.items():
+            if master_key is None:
+                # All groups already failed above; skip iteration body.
+                continue
+
             connection_name = getattr(group_pairs[0][1], "connection_name", None) or connection_id
 
             try:
-                master_key = load_master_key(raw_master_key)
                 raw_creds = database.list_active_connection_credentials(connection_id)
                 decrypted_creds: dict[str, SecretValue] = {
                     name: decrypt_secret(ciphertext, master_key)
                     for name, ciphertext in raw_creds.items()
                 }
-            except (CredentialMasterKeyError, CredentialDecryptionError):
+            except CredentialDecryptionError:
                 _fail_group(
                     group_pairs, "credential_decryption_failed",
                     database, connection_failed_statuses, connection_failed_summaries,
