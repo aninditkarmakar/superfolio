@@ -721,9 +721,12 @@ class DatabaseAdapterTests(unittest.TestCase):
         self.assertIn("public.accounts", sql)
         self.assertIn("public.brokerages", sql)
         self.assertIn("b.code = %s", sql)
+        self.assertIn("p.is_active = true", sql)
+        self.assertIn("a.is_active = true", sql)
+        self.assertIn("b.is_active = true", sql)
         self.assertEqual(params, ("MyPortfolio", "IBKR"))
 
-
+    def test_fetch_portfolio_nav_inputs_maps_rows_with_date_range(self) -> None:
         start = date(2026, 1, 1)
         end = date(2026, 1, 31)
         connection = FakeConnection(

@@ -376,6 +376,9 @@ class SuperFolioDatabase:
             JOIN public.accounts a ON a.id = pa.account_id
             JOIN public.brokerages b ON b.id = a.brokerage_id
             WHERE p.name = %s AND b.code = %s
+            AND p.is_active = true
+            AND a.is_active = true
+            AND b.is_active = true
             ORDER BY a.external_id
             """,
             (portfolio_name, brokerage_code),
