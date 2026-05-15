@@ -390,56 +390,68 @@ def run_automation(request: AutomationRunRequest, *, database, adapter=None) -> 
                 child_statuses.append("succeeded")
                 child_summaries.append(child_summary)
     else:
-        for child_id, account in fetch_pairs:
-            database.mark_automation_job_account_running(child_id)
-            try:
-                if request.mode == "load" and database.has_overlapping_automation_load(
-                    integration_key=request.integration_key,
-                    account_id=account.account_id,
-                    requested_start_date=request.requested_start_date,
-                    requested_end_date=request.requested_end_date,
-                    exclude_automation_job_id=job_id,
-                ):
-                    raise RuntimeError("overlapping_load_job")
-                payload = adapter.fetch_payload(account, request, config)
-                ingestion_run_id, child_status, child_summary, child_message = load_payload(
-                    payload.xml_text,
-                    database=database,
-                    brokerage_code=config.brokerage_code,
-                    account_external_id=account.account_external_id,
-                    source_type=config.source_type,
-                    source_name=payload.source_name,
-                    start_date=str(request.requested_start_date),
-                    end_date=str(request.requested_end_date),
-                )
-            except Exception as exc:
-                error_message = sanitize_error_message(str(exc))
-                is_overlap = isinstance(exc, RuntimeError) and str(exc) == "overlapping_load_job"
-                error_category = "overlapping_load_job" if is_overlap else "fetch_or_parse_error"
-                failed_child_summary = build_child_summary(error_category=error_category)
+        if adapter_supports_feed_payload:
+            _execute_load_multi_feed(
+                fetch_groups=fetch_groups,
+                adapter=adapter,
+                request=request,
+                database=database,
+                config=config,
+                job_id=job_id,
+                child_statuses=child_statuses,
+                child_summaries=child_summaries,
+            )
+        else:
+            for child_id, account in fetch_pairs:
+                database.mark_automation_job_account_running(child_id)
+                try:
+                    if database.has_overlapping_automation_load(
+                        integration_key=request.integration_key,
+                        account_id=account.account_id,
+                        requested_start_date=request.requested_start_date,
+                        requested_end_date=request.requested_end_date,
+                        exclude_automation_job_id=job_id,
+                    ):
+                        raise RuntimeError("overlapping_load_job")
+                    payload = adapter.fetch_payload(account, request, config)
+                    ingestion_run_id, child_status, child_summary, child_message = load_payload(
+                        payload.xml_text,
+                        database=database,
+                        brokerage_code=config.brokerage_code,
+                        account_external_id=account.account_external_id,
+                        source_type=config.source_type,
+                        source_name=payload.source_name,
+                        start_date=str(request.requested_start_date),
+                        end_date=str(request.requested_end_date),
+                    )
+                except Exception as exc:
+                    error_message = sanitize_error_message(str(exc))
+                    is_overlap = isinstance(exc, RuntimeError) and str(exc) == "overlapping_load_job"
+                    error_category = "overlapping_load_job" if is_overlap else "fetch_or_parse_error"
+                    failed_child_summary = build_child_summary(error_category=error_category)
+                    database.finalize_automation_job_account(
+                        AutomationJobAccountFinalize(
+                            automation_job_account_id=child_id,
+                            status="failed",
+                            ingestion_run_id=None,
+                            summary=failed_child_summary,
+                            error_message=error_message,
+                        )
+                    )
+                    child_statuses.append("failed")
+                    child_summaries.append(failed_child_summary)
+                    continue
                 database.finalize_automation_job_account(
                     AutomationJobAccountFinalize(
                         automation_job_account_id=child_id,
-                        status="failed",
-                        ingestion_run_id=None,
-                        summary=failed_child_summary,
-                        error_message=error_message,
+                        status=child_status,
+                        ingestion_run_id=ingestion_run_id,
+                        summary=child_summary,
+                        error_message=child_message,
                     )
                 )
-                child_statuses.append("failed")
-                child_summaries.append(failed_child_summary)
-                continue
-            database.finalize_automation_job_account(
-                AutomationJobAccountFinalize(
-                    automation_job_account_id=child_id,
-                    status=child_status,
-                    ingestion_run_id=ingestion_run_id,
-                    summary=child_summary,
-                    error_message=child_message,
-                )
-            )
-            child_statuses.append(child_status)
-            child_summaries.append(child_summary)
+                child_statuses.append(child_status)
+                child_summaries.append(child_summary)
 
     all_statuses = early_failed_statuses + connection_failed_statuses + child_statuses
     all_summaries = early_failed_summaries + connection_failed_summaries + child_summaries
@@ -627,6 +639,160 @@ def _execute_dry_run_multi_feed(
             agg = empty_record_counts()
             for fr in feed_results:
                 if fr["status"] == "succeeded":
+                    rc = fr.get("record_counts", {})
+                    for rt in RECORD_TYPES:
+                        for key in COUNT_KEYS:
+                            agg[rt][key] += rc.get(rt, {}).get(key, 0)
+
+            child_summary = build_child_summary(
+                cash_supported=agg["cash_flows"]["supported"],
+                cash_inserted=agg["cash_flows"]["inserted"],
+                cash_duplicates=agg["cash_flows"]["duplicates"],
+                cash_skipped_unknown_account=agg["cash_flows"]["skipped_unknown_account"],
+                cash_skipped_inactive_account=agg["cash_flows"]["skipped_inactive_account"],
+                cash_skipped_other_account=agg["cash_flows"]["skipped_other_account"],
+                cash_conflicts=agg["cash_flows"]["conflicts"],
+                nav_supported=agg["daily_nav_snapshots"]["supported"],
+                nav_inserted=agg["daily_nav_snapshots"]["inserted"],
+                nav_duplicates=agg["daily_nav_snapshots"]["duplicates"],
+                nav_skipped_unknown_account=agg["daily_nav_snapshots"]["skipped_unknown_account"],
+                nav_skipped_inactive_account=agg["daily_nav_snapshots"]["skipped_inactive_account"],
+                nav_skipped_other_account=agg["daily_nav_snapshots"]["skipped_other_account"],
+                nav_conflicts=agg["daily_nav_snapshots"]["conflicts"],
+                error_category=child_error_category,
+                feed_results=feed_results,
+            )
+
+            database.finalize_automation_job_account(
+                AutomationJobAccountFinalize(
+                    automation_job_account_id=child_id,
+                    status=child_status,
+                    ingestion_run_id=None,
+                    summary=child_summary,
+                    error_message=None,
+                )
+            )
+            child_statuses.append(child_status)
+            child_summaries.append(child_summary)
+
+
+def _execute_load_multi_feed(
+    *,
+    fetch_groups: list[tuple[Any, list[Any], list[tuple[str, Any]]]],
+    adapter: Any,
+    request: Any,
+    database: Any,
+    config: Any,
+    job_id: str,
+    child_statuses: list[str],
+    child_summaries: list[dict[str, Any]],
+) -> None:
+    """Execute multi-feed load for all connection groups.
+
+    For each connection group:
+    - Guard against empty feed list (no_active_feeds).
+    - For each account, run the date-overlap check once before loading any feed.
+    - If overlap is detected, fail that account without fetching any feeds.
+    - Otherwise, fetch each feed payload in stable (alphabetical) feed_key order,
+      call load_payload per feed (each gets its own ingestion run), accumulate
+      record counts from succeeded/partially-succeeded feeds, and build feed_results.
+    - Derive child status: all succeeded → succeeded; all failed → failed; mixed →
+      partially_succeeded. Finalize each account child row accordingly.
+    """
+    for connection_ctx, feed_ctxs, group_pairs in fetch_groups:
+        # Guard: fail the entire connection group if there are no active feeds.
+        if not feed_ctxs:
+            failed_summary = build_child_summary(error_category="no_active_feeds")
+            for child_id, _ in group_pairs:
+                database.mark_automation_job_account_running(child_id)
+                database.finalize_automation_job_account(
+                    AutomationJobAccountFinalize(
+                        automation_job_account_id=child_id,
+                        status="failed",
+                        ingestion_run_id=None,
+                        summary=failed_summary,
+                        error_message="no_active_feeds",
+                    )
+                )
+                child_statuses.append("failed")
+                child_summaries.append(failed_summary)
+            continue
+
+        sorted_feeds = sorted(feed_ctxs, key=lambda f: f.feed_key)
+
+        for child_id, account in group_pairs:
+            database.mark_automation_job_account_running(child_id)
+
+            # Run account/date overlap check once before loading any feed.
+            if database.has_overlapping_automation_load(
+                integration_key=request.integration_key,
+                account_id=account.account_id,
+                requested_start_date=request.requested_start_date,
+                requested_end_date=request.requested_end_date,
+                exclude_automation_job_id=job_id,
+            ):
+                overlap_summary = build_child_summary(error_category="overlapping_load_job")
+                database.finalize_automation_job_account(
+                    AutomationJobAccountFinalize(
+                        automation_job_account_id=child_id,
+                        status="failed",
+                        ingestion_run_id=None,
+                        summary=overlap_summary,
+                        error_message="overlapping_load_job",
+                    )
+                )
+                child_statuses.append("failed")
+                child_summaries.append(overlap_summary)
+                continue
+
+            # Fetch and load each feed in stable alphabetical feed_key order.
+            feed_results: list[dict[str, Any]] = []
+            for feed_ctx in sorted_feeds:
+                try:
+                    payload = adapter.fetch_feed_payload(connection_ctx, feed_ctx, request)
+                    _ingestion_run_id, feed_status, feed_summary, _feed_msg = load_payload(
+                        payload.xml_text,
+                        database=database,
+                        brokerage_code=config.brokerage_code,
+                        account_external_id=account.account_external_id,
+                        source_type=config.source_type,
+                        source_name=payload.source_name,
+                        start_date=str(request.requested_start_date),
+                        end_date=str(request.requested_end_date),
+                    )
+                    feed_results.append({
+                        "feed_key": feed_ctx.feed_key,
+                        "display_name": feed_ctx.display_name or feed_ctx.feed_key,
+                        "status": feed_status,
+                        "record_counts": feed_summary["record_counts"],
+                    })
+                except Exception as exc:
+                    err_msg = sanitize_error_message(str(exc))
+                    feed_results.append({
+                        "feed_key": feed_ctx.feed_key,
+                        "display_name": feed_ctx.display_name or feed_ctx.feed_key,
+                        "status": "failed",
+                        "error_category": "feed_fetch_failed",
+                        "record_counts": empty_record_counts(),
+                        "message": err_msg,
+                    })
+
+            # Derive child status from per-feed statuses.
+            feed_statuses = [fr["status"] for fr in feed_results]
+            if all(s == "succeeded" for s in feed_statuses):
+                child_status = "succeeded"
+                child_error_category: str | None = None
+            elif all(s == "failed" for s in feed_statuses):
+                child_status = "failed"
+                child_error_category = "feed_fetch_failed"
+            else:
+                child_status = "partially_succeeded"
+                child_error_category = None
+
+            # Aggregate record counts from all non-failed feeds.
+            agg = empty_record_counts()
+            for fr in feed_results:
+                if fr["status"] in ("succeeded", "partially_succeeded"):
                     rc = fr.get("record_counts", {})
                     for rt in RECORD_TYPES:
                         for key in COUNT_KEYS:

@@ -4100,5 +4100,228 @@ class DryRunMultiFeedTests(unittest.TestCase):
         self.assertEqual(rc["daily_nav_snapshots"]["supported"], 0)
 
 
+# ---------------------------------------------------------------------------
+# Task 13: Multi-feed load execution for connection-aware adapters
+# ---------------------------------------------------------------------------
+
+
+def _make_accounts_load_request(external_id: str = "U100"):
+    """Create a load-mode AutomationRunRequest for a single account external ID."""
+    from portfolio_engine.automation.types import AutomationRunRequest
+    return AutomationRunRequest(
+        target_type="accounts",
+        integration_key="ibkr_flex_ws",
+        mode="load",
+        requested_start_date=date(2024, 1, 1),
+        requested_end_date=date(2024, 1, 31),
+        account_external_ids=(external_id,),
+    )
+
+
+class LoadMultiFeedTests(unittest.TestCase):
+    """Task 13: Load mode fetches all enabled feeds per connection and aggregates results."""
+
+    # Reuse synthetic XML fixtures from Task 12
+    CASH_XML = _MULTI_FEED_CASH_XML_WITH_RECORDS
+    NAV_XML = _MULTI_FEED_NAV_XML_WITH_RECORDS
+
+    def _run(self, request, db, adapter):
+        from portfolio_engine.automation.orchestrator import run_automation
+        with mock.patch.dict(os.environ, {"SUPERFOLIO_CREDENTIAL_MASTER_KEY": _TEST_MASTER_KEY}):
+            return run_automation(request, database=db, adapter=adapter)
+
+    def _find_child(self, db, child_id: str):
+        for f in db.finalized_children:
+            if f.automation_job_account_id == child_id:
+                return f
+        return None
+
+    def test_load_fetches_all_feeds_and_sums_record_counts(self) -> None:
+        """Load with two feeds (cash, nav): both succeed, record counts summed across feeds."""
+        db = _configured_db_with_connection_feeds(["cash", "nav"])
+        adapter = FakeMultiFeedAdapter(
+            payload_by_feed={"cash": self.CASH_XML, "nav": self.NAV_XML}
+        )
+
+        result = self._run(_make_accounts_load_request(), db=db, adapter=adapter)
+
+        self.assertEqual(result.status, "succeeded")
+        child = self._find_child(db, "child-1")
+        self.assertIsNotNone(child)
+        rc = child.summary["record_counts"]
+        self.assertGreaterEqual(rc["cash_flows"]["supported"], 1)
+        self.assertGreaterEqual(rc["daily_nav_snapshots"]["supported"], 1)
+
+    def test_load_partial_when_one_feed_fails_after_another_succeeds(self) -> None:
+        """Load with cash succeeding and nav failing: parent and child partially_succeeded."""
+        db = _configured_db_with_connection_feeds(["cash", "nav"])
+        adapter = FakeMultiFeedAdapter(
+            payload_by_feed={"cash": self.CASH_XML},
+            failing_feed_keys={"nav"},
+        )
+
+        result = self._run(_make_accounts_load_request(), db=db, adapter=adapter)
+
+        self.assertEqual(result.status, "partially_succeeded")
+        child = self._find_child(db, "child-1")
+        self.assertIsNotNone(child)
+        self.assertEqual(child.status, "partially_succeeded")
+
+    def test_load_all_feeds_fail_yields_failed(self) -> None:
+        """Load with all feeds failing: child and parent are failed."""
+        db = _configured_db_with_connection_feeds(["cash", "nav"])
+        adapter = FakeMultiFeedAdapter(
+            payload_by_feed={},
+            failing_feed_keys={"cash", "nav"},
+        )
+
+        result = self._run(_make_accounts_load_request(), db=db, adapter=adapter)
+
+        self.assertEqual(result.status, "failed")
+        child = self._find_child(db, "child-1")
+        self.assertIsNotNone(child)
+        self.assertEqual(child.status, "failed")
+
+    def test_load_overlap_check_runs_once_per_account_before_any_feed(self) -> None:
+        """Overlap check is called exactly once per account before any feed is loaded."""
+        db = _configured_db_with_connection_feeds(["cash", "nav"])
+        db.overlapping_load = False
+        adapter = FakeMultiFeedAdapter(
+            payload_by_feed={"cash": self.CASH_XML, "nav": self.NAV_XML}
+        )
+
+        self._run(_make_accounts_load_request(), db=db, adapter=adapter)
+
+        # Exactly one overlap check per account, not one per feed
+        self.assertEqual(len(db.overlap_check_calls), 1)
+
+    def test_load_overlap_fails_child_and_skips_all_feeds(self) -> None:
+        """When overlap detected, child is failed and no feeds are fetched."""
+        db = _configured_db_with_connection_feeds(["cash", "nav"])
+        db.overlapping_load = True
+        adapter = FakeMultiFeedAdapter(
+            payload_by_feed={"cash": self.CASH_XML, "nav": self.NAV_XML}
+        )
+
+        result = self._run(_make_accounts_load_request(), db=db, adapter=adapter)
+
+        self.assertEqual(result.status, "failed")
+        child = self._find_child(db, "child-1")
+        self.assertIsNotNone(child)
+        self.assertEqual(child.status, "failed")
+        self.assertEqual(child.summary.get("error_category"), "overlapping_load_job")
+        # No feeds must have been fetched
+        self.assertEqual(adapter.fetched_feed_keys, [])
+
+    def test_load_feed_results_included_in_child_summary(self) -> None:
+        """Load multi-feed: child summary includes feed_results with one entry per feed."""
+        db = _configured_db_with_connection_feeds(["cash", "nav"])
+        adapter = FakeMultiFeedAdapter(
+            payload_by_feed={"cash": self.CASH_XML, "nav": self.NAV_XML}
+        )
+
+        self._run(_make_accounts_load_request(), db=db, adapter=adapter)
+
+        child = self._find_child(db, "child-1")
+        self.assertIsNotNone(child)
+        self.assertIn("feed_results", child.summary)
+        self.assertEqual(len(child.summary["feed_results"]), 2)
+        feed_keys = [fr["feed_key"] for fr in child.summary["feed_results"]]
+        self.assertIn("cash", feed_keys)
+        self.assertIn("nav", feed_keys)
+
+    def test_load_feed_results_no_secrets(self) -> None:
+        """feed_results in child summary must not contain credential values."""
+        db = _configured_db_with_connection_feeds(["cash"])
+        adapter = FakeMultiFeedAdapter(
+            payload_by_feed={},
+            failing_feed_keys={"cash"},
+        )
+
+        self._run(_make_accounts_load_request(), db=db, adapter=adapter)
+
+        child = self._find_child(db, "child-1")
+        self.assertIsNotNone(child)
+        summary_str = str(child.summary)
+        self.assertNotIn("query_id", summary_str)
+        self.assertNotIn("query-cash", summary_str)
+
+    def test_load_ingestion_runs_created_per_feed(self) -> None:
+        """Load multi-feed: one ingestion run is started per successful feed per account."""
+        db = _configured_db_with_connection_feeds(["cash", "nav"])
+        adapter = FakeMultiFeedAdapter(
+            payload_by_feed={"cash": self.CASH_XML, "nav": self.NAV_XML}
+        )
+
+        self._run(_make_accounts_load_request(), db=db, adapter=adapter)
+
+        # Two feeds succeed → two ingestion runs started and completed
+        self.assertEqual(len(db.started_ingestion_runs), 2)
+        self.assertEqual(len(db.completed_ingestion_runs), 2)
+
+    def test_load_mixed_feed_results_statuses_per_feed(self) -> None:
+        """Load with cash success and nav failure: feed_results reflect per-feed statuses."""
+        db = _configured_db_with_connection_feeds(["cash", "nav"])
+        adapter = FakeMultiFeedAdapter(
+            payload_by_feed={"cash": self.CASH_XML},
+            failing_feed_keys={"nav"},
+        )
+
+        self._run(_make_accounts_load_request(), db=db, adapter=adapter)
+
+        child = self._find_child(db, "child-1")
+        self.assertIsNotNone(child)
+        feed_results_by_key = {fr["feed_key"]: fr for fr in child.summary["feed_results"]}
+        self.assertEqual(feed_results_by_key["cash"]["status"], "succeeded")
+        self.assertEqual(feed_results_by_key["nav"]["status"], "failed")
+
+    def test_load_marks_child_running_before_finalize(self) -> None:
+        """mark_automation_job_account_running called before finalize in load multi-feed mode."""
+        db = _configured_db_with_connection_feeds(["cash"])
+        adapter = FakeMultiFeedAdapter(payload_by_feed={"cash": self.CASH_XML})
+
+        self._run(_make_accounts_load_request(), db=db, adapter=adapter)
+
+        self.assertIn("child-1", db.running_children)
+        mark_idx = db._event_log.index("mark_running:child-1")
+        finalize_idx = db._event_log.index("finalize_child:child-1")
+        self.assertLess(mark_idx, finalize_idx)
+
+    def test_load_feeds_fetched_in_stable_order(self) -> None:
+        """Feeds are fetched in stable alphabetical feed_key order in load mode."""
+        db = _configured_db_with_connection_feeds(["nav", "cash"])
+        adapter = FakeMultiFeedAdapter(
+            payload_by_feed={"cash": self.CASH_XML, "nav": self.NAV_XML}
+        )
+
+        self._run(_make_accounts_load_request(), db=db, adapter=adapter)
+
+        self.assertEqual(adapter.fetched_feed_keys, ["cash", "nav"])
+
+    def test_load_no_active_feeds_fails_child(self) -> None:
+        """Load with no active feeds: child and parent are failed."""
+        db = _configured_db_with_connection_feeds([])
+        adapter = FakeMultiFeedAdapter(payload_by_feed={})
+
+        result = self._run(_make_accounts_load_request(), db=db, adapter=adapter)
+
+        self.assertEqual(result.status, "failed")
+        child = self._find_child(db, "child-1")
+        self.assertIsNotNone(child)
+        self.assertEqual(child.status, "failed")
+        self.assertEqual(child.summary.get("error_category"), "no_active_feeds")
+
+    def test_load_child_summary_has_record_counts(self) -> None:
+        """Load multi-feed child summary must contain record_counts."""
+        db = _configured_db_with_connection_feeds(["cash"])
+        adapter = FakeMultiFeedAdapter(payload_by_feed={"cash": self.CASH_XML})
+
+        self._run(_make_accounts_load_request(), db=db, adapter=adapter)
+
+        child = self._find_child(db, "child-1")
+        self.assertIsNotNone(child)
+        self.assertIn("record_counts", child.summary)
+
+
 if __name__ == "__main__":
     unittest.main()
