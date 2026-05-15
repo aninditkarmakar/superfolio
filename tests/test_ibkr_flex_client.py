@@ -103,6 +103,105 @@ class IbkrFlexClientRequestTests(unittest.TestCase):
         self.assertEqual(transport.calls[1]["headers"], {"User-Agent": IBKR_FLEX_USER_AGENT})
         self.assertEqual(sleeps, [20.0])
 
+    def test_getstatement_temporary_error_polls_then_succeeds(self) -> None:
+        transport = FakeTransport(
+            [
+                FakeHttpResponse(200, """<FlexStatementResponse><Status>Success</Status><ReferenceCode>123</ReferenceCode></FlexStatementResponse>"""),
+                FakeHttpResponse(200, """<FlexStatementResponse><Status>Fail</Status><ErrorCode>1019</ErrorCode><ErrorMessage>Statement generation in progress.</ErrorMessage></FlexStatementResponse>"""),
+                FakeHttpResponse(200, VALID_FLEX_XML),
+            ]
+        )
+        sleeps: list[float] = []
+        client = IbkrFlexWebServiceClient(transport=transport, sleep=sleeps.append)
+
+        self.assertEqual(client.fetch_report(token="token", query_id="query"), VALID_FLEX_XML)
+        self.assertEqual(len([c for c in transport.calls if str(c["url"]).endswith("/GetStatement")]), 2)
+        self.assertEqual(sleeps, [20.0, 20.0])
+
+    def test_getstatement_polls_five_total_attempts_then_report_not_ready(self) -> None:
+        responses = [
+            FakeHttpResponse(200, """<FlexStatementResponse><Status>Success</Status><ReferenceCode>123</ReferenceCode></FlexStatementResponse>"""),
+        ] + [
+            FakeHttpResponse(200, """<FlexStatementResponse><Status>Fail</Status><ErrorCode>1019</ErrorCode><ErrorMessage>Statement generation in progress.</ErrorMessage></FlexStatementResponse>""")
+            for _ in range(5)
+        ]
+        transport = FakeTransport(responses)
+        client = IbkrFlexWebServiceClient(transport=transport, sleep=lambda seconds: None)
+
+        with self.assertRaises(BrokerFetchError) as ctx:
+            client.fetch_report(token="token", query_id="query")
+
+        self.assertEqual(ctx.exception.category, "ibkr_report_not_ready")
+        self.assertEqual(len([c for c in transport.calls if str(c["url"]).endswith("/GetStatement")]), 5)
+
+    def test_sendrequest_network_failure_is_not_retried(self) -> None:
+        transport = FakeTransport([OSError("token=secret query_id=secret")])
+        client = IbkrFlexWebServiceClient(transport=transport, sleep=lambda seconds: None)
+
+        with self.assertRaises(BrokerFetchError) as ctx:
+            client.fetch_report(token="secret-token", query_id="secret-query")
+
+        self.assertEqual(ctx.exception.category, "ibkr_fetch_failed")
+        self.assertEqual(len(transport.calls), 1)
+        self.assertNotIn("secret-token", str(ctx.exception))
+        self.assertNotIn("secret-query", str(ctx.exception))
+
+    def test_known_error_codes_map_to_categories(self) -> None:
+        cases = {
+            "1012": "ibkr_auth_failed",
+            "1014": "ibkr_invalid_query",
+            "1018": "ibkr_pacing_limit",
+            "1019": "ibkr_report_not_ready",
+            "9999": "ibkr_fetch_failed",
+            "not-a-number": "ibkr_fetch_failed",
+        }
+        for code, category in cases.items():
+            with self.subTest(code=code):
+                transport = FakeTransport(
+                    [
+                        FakeHttpResponse(
+                            200,
+                            f"""<FlexStatementResponse><Status>Fail</Status><ErrorCode>{code}</ErrorCode><ErrorMessage>Message</ErrorMessage></FlexStatementResponse>""",
+                        )
+                    ]
+                )
+                client = IbkrFlexWebServiceClient(transport=transport, sleep=lambda seconds: None)
+
+                with self.assertRaises(BrokerFetchError) as ctx:
+                    client.fetch_report(token="token", query_id="query")
+
+                self.assertEqual(ctx.exception.category, category)
+
+    def test_getstatement_service_error_xml_is_not_returned_to_parser(self) -> None:
+        transport = FakeTransport(
+            [
+                FakeHttpResponse(200, """<FlexStatementResponse><Status>Success</Status><ReferenceCode>123</ReferenceCode></FlexStatementResponse>"""),
+                FakeHttpResponse(200, """<FlexStatementResponse><Status>Fail</Status><ErrorCode>1012</ErrorCode><ErrorMessage>Token expired.</ErrorMessage></FlexStatementResponse>"""),
+            ]
+        )
+        client = IbkrFlexWebServiceClient(transport=transport, sleep=lambda seconds: None)
+
+        with self.assertRaises(BrokerFetchError) as ctx:
+            client.fetch_report(token="token", query_id="query")
+
+        self.assertEqual(ctx.exception.category, "ibkr_auth_failed")
+
+    def test_unknown_xml_root_and_html_are_fetch_failed(self) -> None:
+        for body in ("<UnexpectedRoot />", "<html>maintenance</html>"):
+            with self.subTest(body=body):
+                transport = FakeTransport(
+                    [
+                        FakeHttpResponse(200, """<FlexStatementResponse><Status>Success</Status><ReferenceCode>123</ReferenceCode></FlexStatementResponse>"""),
+                        FakeHttpResponse(200, body),
+                    ]
+                )
+                client = IbkrFlexWebServiceClient(transport=transport, sleep=lambda seconds: None)
+
+                with self.assertRaises(BrokerFetchError) as ctx:
+                    client.fetch_report(token="token", query_id="query")
+
+                self.assertEqual(ctx.exception.category, "ibkr_fetch_failed")
+
 
 class FakeHttpxClient:
     """Minimal fake for httpx.Client that tracks whether close() was called."""

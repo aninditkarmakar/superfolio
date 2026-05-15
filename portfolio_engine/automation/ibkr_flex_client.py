@@ -73,45 +73,41 @@ class IbkrFlexWebServiceClient:
         return self._get_statement(token=token, reference_code=reference_code)
 
     def _send_request(self, *, token: str, query_id: str) -> str:
-        response = self._transport.get(
-            f"{IBKR_FLEX_BASE_URL}/SendRequest",
-            params={"t": token, "q": query_id, "v": IBKR_FLEX_VERSION},
-            headers={"User-Agent": IBKR_FLEX_USER_AGENT},
-            timeout=HTTP_TIMEOUT_SECONDS,
-        )
-        if response.status_code >= 400:
-            raise BrokerFetchError("ibkr_fetch_failed", "ibkr_fetch_failed")
-        root = _parse_xml(response.text)
-        if root.tag != "FlexStatementResponse":
-            raise BrokerFetchError("ibkr_fetch_failed", "ibkr_fetch_failed")
-        status = _child_text(root, "Status")
-        if status == "Fail":
-            raise _error_from_service_response(root)
-        if status != "Success":
-            raise BrokerFetchError("ibkr_fetch_failed", "ibkr_fetch_failed")
-        reference_code = _child_text(root, "ReferenceCode")
-        if not reference_code:
-            raise BrokerFetchError("ibkr_fetch_failed", "ibkr_fetch_failed")
-        return reference_code
+        try:
+            response = self._transport.get(
+                f"{IBKR_FLEX_BASE_URL}/SendRequest",
+                params={"t": token, "q": query_id, "v": IBKR_FLEX_VERSION},
+                headers={"User-Agent": IBKR_FLEX_USER_AGENT},
+                timeout=HTTP_TIMEOUT_SECONDS,
+            )
+        except Exception as error:
+            raise BrokerFetchError("ibkr_fetch_failed", "ibkr_fetch_failed") from error
+        return _reference_code_from_send_response(response)
 
     def _get_statement(self, *, token: str, reference_code: str) -> str:
-        response = self._transport.get(
-            f"{IBKR_FLEX_BASE_URL}/GetStatement",
-            params={"t": token, "q": reference_code, "v": IBKR_FLEX_VERSION},
-            headers={"User-Agent": IBKR_FLEX_USER_AGENT},
-            timeout=HTTP_TIMEOUT_SECONDS,
-        )
-        if response.status_code >= 400:
-            raise BrokerFetchError("ibkr_fetch_failed", "ibkr_fetch_failed")
-        root = _parse_xml(response.text)
-        if root.tag == "FlexStatementResponse":
-            status = _child_text(root, "Status")
-            if status == "Fail":
-                raise _error_from_service_response(root)
-            raise BrokerFetchError("ibkr_fetch_failed", "ibkr_fetch_failed")
-        if root.tag not in ACCEPTED_REPORT_ROOTS:
-            raise BrokerFetchError("ibkr_fetch_failed", "ibkr_fetch_failed")
-        return response.text
+        last_error: BrokerFetchError | None = None
+        for attempt in range(GETSTATEMENT_TOTAL_ATTEMPTS):
+            try:
+                response = self._transport.get(
+                    f"{IBKR_FLEX_BASE_URL}/GetStatement",
+                    params={"t": token, "q": reference_code, "v": IBKR_FLEX_VERSION},
+                    headers={"User-Agent": IBKR_FLEX_USER_AGENT},
+                    timeout=HTTP_TIMEOUT_SECONDS,
+                )
+                return _report_xml_from_get_response(response)
+            except BrokerFetchError as error:
+                if error.category != "ibkr_report_not_ready":
+                    raise
+                last_error = error
+            except Exception as error:
+                last_error = BrokerFetchError("ibkr_fetch_failed", "ibkr_fetch_failed")
+                if attempt == GETSTATEMENT_TOTAL_ATTEMPTS - 1:
+                    raise last_error from error
+
+            if attempt < GETSTATEMENT_TOTAL_ATTEMPTS - 1:
+                self._sleep(GETSTATEMENT_RETRY_WAIT_SECONDS)
+
+        raise last_error or BrokerFetchError("ibkr_report_not_ready", "ibkr_report_not_ready")
 
 
 def _parse_xml(xml_text: str) -> ElementTree.Element:
@@ -126,6 +122,37 @@ def _child_text(root: ElementTree.Element, tag: str) -> str | None:
     if child is None or child.text is None:
         return None
     return child.text.strip()
+
+
+def _reference_code_from_send_response(response: HttpResponse) -> str:
+    if response.status_code >= 400:
+        raise BrokerFetchError("ibkr_fetch_failed", "ibkr_fetch_failed")
+    root = _parse_xml(response.text)
+    if root.tag != "FlexStatementResponse":
+        raise BrokerFetchError("ibkr_fetch_failed", "ibkr_fetch_failed")
+    status = _child_text(root, "Status")
+    if status == "Fail":
+        raise _error_from_service_response(root)
+    if status != "Success":
+        raise BrokerFetchError("ibkr_fetch_failed", "ibkr_fetch_failed")
+    reference_code = _child_text(root, "ReferenceCode")
+    if not reference_code:
+        raise BrokerFetchError("ibkr_fetch_failed", "ibkr_fetch_failed")
+    return reference_code
+
+
+def _report_xml_from_get_response(response: HttpResponse) -> str:
+    if response.status_code >= 400:
+        raise BrokerFetchError("ibkr_fetch_failed", "ibkr_fetch_failed")
+    root = _parse_xml(response.text)
+    if root.tag == "FlexStatementResponse":
+        status = _child_text(root, "Status")
+        if status == "Fail":
+            raise _error_from_service_response(root)
+        raise BrokerFetchError("ibkr_fetch_failed", "ibkr_fetch_failed")
+    if root.tag not in ACCEPTED_REPORT_ROOTS:
+        raise BrokerFetchError("ibkr_fetch_failed", "ibkr_fetch_failed")
+    return response.text
 
 
 def _error_from_service_response(root: ElementTree.Element) -> BrokerFetchError:
