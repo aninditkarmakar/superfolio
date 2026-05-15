@@ -17,7 +17,13 @@ from portfolio_engine.automation.credentials import (
 )
 from portfolio_engine.automation.ingestion import dry_run_payload, load_payload
 from portfolio_engine.automation.sanitization import sanitize_error_message
-from portfolio_engine.automation.summary import build_child_summary, build_parent_summary
+from portfolio_engine.automation.summary import (
+    COUNT_KEYS,
+    RECORD_TYPES,
+    build_child_summary,
+    build_parent_summary,
+    empty_record_counts,
+)
 from portfolio_engine.automation.targets import AutomationValidationError, validate_target_inputs
 from portfolio_engine.automation.types import (
     AutomationRunRequest,
@@ -220,6 +226,8 @@ def run_automation(request: AutomationRunRequest, *, database, adapter=None) -> 
 
     # Pairs that passed credential/preflight checks, eligible for fetch.
     fetch_pairs: list[tuple[str, Any]] = []
+    # Connection groups that passed preflight, for multi-feed fetch.
+    fetch_groups: list[tuple[Any, list[Any], list[tuple[str, Any]]]] = []
     # Pairs whose connection group failed credential/preflight checks.
     connection_failed_statuses: list[str] = []
     connection_failed_summaries: list[dict[str, Any]] = []
@@ -324,46 +332,63 @@ def run_automation(request: AutomationRunRequest, *, database, adapter=None) -> 
 
             for pair in group_pairs:
                 fetch_pairs.append(pair)
+            fetch_groups.append((connection_context, feed_contexts, list(group_pairs)))
     else:
         fetch_pairs = list(assigned_pairs)
 
+    # Detect whether the adapter supports per-feed payload fetching.
+    adapter_supports_feed_payload = (
+        hasattr(adapter, "fetch_feed_payload")
+        and callable(getattr(adapter, "fetch_feed_payload"))
+    )
+
     if request.mode == "dry-run":
-        for child_id, account in fetch_pairs:
-            database.mark_automation_job_account_running(child_id)
-            try:
-                payload = adapter.fetch_payload(account, request, config)
-                child_summary = dry_run_payload(
-                    payload.xml_text,
-                    account_external_id=account.account_external_id,
-                    start_date=str(request.requested_start_date),
-                    end_date=str(request.requested_end_date),
-                )
-            except Exception as exc:
-                error_message = sanitize_error_message(str(exc))
-                failed_child_summary = build_child_summary(error_category="fetch_or_parse_error")
+        if adapter_supports_feed_payload:
+            _execute_dry_run_multi_feed(
+                fetch_groups=fetch_groups,
+                adapter=adapter,
+                request=request,
+                database=database,
+                child_statuses=child_statuses,
+                child_summaries=child_summaries,
+            )
+        else:
+            for child_id, account in fetch_pairs:
+                database.mark_automation_job_account_running(child_id)
+                try:
+                    payload = adapter.fetch_payload(account, request, config)
+                    child_summary = dry_run_payload(
+                        payload.xml_text,
+                        account_external_id=account.account_external_id,
+                        start_date=str(request.requested_start_date),
+                        end_date=str(request.requested_end_date),
+                    )
+                except Exception as exc:
+                    error_message = sanitize_error_message(str(exc))
+                    failed_child_summary = build_child_summary(error_category="fetch_or_parse_error")
+                    database.finalize_automation_job_account(
+                        AutomationJobAccountFinalize(
+                            automation_job_account_id=child_id,
+                            status="failed",
+                            ingestion_run_id=None,
+                            summary=failed_child_summary,
+                            error_message=error_message,
+                        )
+                    )
+                    child_statuses.append("failed")
+                    child_summaries.append(failed_child_summary)
+                    continue
                 database.finalize_automation_job_account(
                     AutomationJobAccountFinalize(
                         automation_job_account_id=child_id,
-                        status="failed",
+                        status="succeeded",
                         ingestion_run_id=None,
-                        summary=failed_child_summary,
-                        error_message=error_message,
+                        summary=child_summary,
+                        error_message=None,
                     )
                 )
-                child_statuses.append("failed")
-                child_summaries.append(failed_child_summary)
-                continue
-            database.finalize_automation_job_account(
-                AutomationJobAccountFinalize(
-                    automation_job_account_id=child_id,
-                    status="succeeded",
-                    ingestion_run_id=None,
-                    summary=child_summary,
-                    error_message=None,
-                )
-            )
-            child_statuses.append("succeeded")
-            child_summaries.append(child_summary)
+                child_statuses.append("succeeded")
+                child_summaries.append(child_summary)
     else:
         for child_id, account in fetch_pairs:
             database.mark_automation_job_account_running(child_id)
@@ -506,3 +531,114 @@ def _derive_parent_status(child_statuses: list[str]) -> str:
     if all(s == "failed" for s in child_statuses):
         return "failed"
     return "partially_succeeded"
+
+
+def _execute_dry_run_multi_feed(
+    *,
+    fetch_groups: list[tuple[Any, list[Any], list[tuple[str, Any]]]],
+    adapter: Any,
+    request: Any,
+    database: Any,
+    child_statuses: list[str],
+    child_summaries: list[dict[str, Any]],
+) -> None:
+    """Execute multi-feed dry-run for all connection groups.
+
+    For each connection group, iterates feeds in stable (alphabetical) feed_key order,
+    fetches each payload via adapter.fetch_feed_payload, runs dry_run_payload per account,
+    aggregates record counts, builds feed_results, derives child status, and finalizes
+    each account child row.
+    """
+    for connection_ctx, feed_ctxs, group_pairs in fetch_groups:
+        # Mark all accounts in this group as running before processing feeds.
+        for child_id, _ in group_pairs:
+            database.mark_automation_job_account_running(child_id)
+
+        # Initialize per-account feed results accumulator.
+        account_feed_results: dict[str, list[dict[str, Any]]] = {
+            cid: [] for cid, _ in group_pairs
+        }
+
+        # Fetch each feed in stable alphabetical feed_key order.
+        for feed_ctx in sorted(feed_ctxs, key=lambda f: f.feed_key):
+            try:
+                payload = adapter.fetch_feed_payload(connection_ctx, feed_ctx, request)
+                for child_id, account in group_pairs:
+                    per_feed_summary = dry_run_payload(
+                        payload.xml_text,
+                        account_external_id=account.account_external_id,
+                        start_date=str(request.requested_start_date),
+                        end_date=str(request.requested_end_date),
+                    )
+                    account_feed_results[child_id].append({
+                        "feed_key": feed_ctx.feed_key,
+                        "display_name": feed_ctx.display_name or feed_ctx.feed_key,
+                        "status": "succeeded",
+                        "record_counts": per_feed_summary["record_counts"],
+                    })
+            except Exception as exc:
+                err_msg = sanitize_error_message(str(exc))
+                for child_id, _ in group_pairs:
+                    account_feed_results[child_id].append({
+                        "feed_key": feed_ctx.feed_key,
+                        "display_name": feed_ctx.display_name or feed_ctx.feed_key,
+                        "status": "failed",
+                        "error_category": "feed_fetch_failed",
+                        "record_counts": empty_record_counts(),
+                        "message": err_msg,
+                    })
+
+        # Finalize each account based on its aggregated feed results.
+        for child_id, account in group_pairs:
+            feed_results = account_feed_results[child_id]
+            feed_statuses = [fr["status"] for fr in feed_results]
+
+            if all(s == "succeeded" for s in feed_statuses):
+                child_status = "succeeded"
+                child_error_category: str | None = None
+            elif all(s == "failed" for s in feed_statuses):
+                child_status = "failed"
+                child_error_category = "feed_fetch_failed"
+            else:
+                child_status = "partially_succeeded"
+                child_error_category = None
+
+            # Aggregate record counts across all succeeded feeds.
+            agg = empty_record_counts()
+            for fr in feed_results:
+                if fr["status"] == "succeeded":
+                    rc = fr.get("record_counts", {})
+                    for rt in RECORD_TYPES:
+                        for key in COUNT_KEYS:
+                            agg[rt][key] += rc.get(rt, {}).get(key, 0)
+
+            child_summary = build_child_summary(
+                cash_supported=agg["cash_flows"]["supported"],
+                cash_inserted=agg["cash_flows"]["inserted"],
+                cash_duplicates=agg["cash_flows"]["duplicates"],
+                cash_skipped_unknown_account=agg["cash_flows"]["skipped_unknown_account"],
+                cash_skipped_inactive_account=agg["cash_flows"]["skipped_inactive_account"],
+                cash_skipped_other_account=agg["cash_flows"]["skipped_other_account"],
+                cash_conflicts=agg["cash_flows"]["conflicts"],
+                nav_supported=agg["daily_nav_snapshots"]["supported"],
+                nav_inserted=agg["daily_nav_snapshots"]["inserted"],
+                nav_duplicates=agg["daily_nav_snapshots"]["duplicates"],
+                nav_skipped_unknown_account=agg["daily_nav_snapshots"]["skipped_unknown_account"],
+                nav_skipped_inactive_account=agg["daily_nav_snapshots"]["skipped_inactive_account"],
+                nav_skipped_other_account=agg["daily_nav_snapshots"]["skipped_other_account"],
+                nav_conflicts=agg["daily_nav_snapshots"]["conflicts"],
+                error_category=child_error_category,
+                feed_results=feed_results,
+            )
+
+            database.finalize_automation_job_account(
+                AutomationJobAccountFinalize(
+                    automation_job_account_id=child_id,
+                    status=child_status,
+                    ingestion_run_id=None,
+                    summary=child_summary,
+                    error_message=None,
+                )
+            )
+            child_statuses.append(child_status)
+            child_summaries.append(child_summary)

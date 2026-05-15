@@ -3758,5 +3758,245 @@ class CredentialLoadingOrchestratorTests(unittest.TestCase):
         self.assertNotEqual(child_1.summary["error_category"], "credential_master_key_error")
 
 
+# ---------------------------------------------------------------------------
+# Task 12: Multi-feed dry-run execution
+# ---------------------------------------------------------------------------
+
+_MULTI_FEED_CASH_XML = "<FlexQueryResponse></FlexQueryResponse>"
+_MULTI_FEED_NAV_XML = "<FlexQueryResponse></FlexQueryResponse>"
+
+
+class FakeMultiFeedAdapter:
+    """Connection-aware adapter with fetch_feed_payload support for Task 12 tests."""
+
+    def __init__(self, *, payload_by_feed=None, failing_feed_keys=None):
+        self.payload_by_feed = payload_by_feed or {}
+        self.failing_feed_keys: set[str] = set(failing_feed_keys or set())
+        self.fetched_feed_keys: list[str] = []
+        self.preflight_connection_calls: list = []
+
+    def preflight_validate_config(self, config) -> None:
+        return None
+
+    def preflight_connection(self, connection, feeds) -> None:
+        self.preflight_connection_calls.append((connection, feeds))
+
+    def fetch_feed_payload(self, connection_context, feed_context, request):
+        from portfolio_engine.automation.types import BrokerPayload
+        self.fetched_feed_keys.append(feed_context.feed_key)
+        if feed_context.feed_key in self.failing_feed_keys:
+            raise RuntimeError(f"feed_fetch_failed: {feed_context.feed_key}")
+        xml = self.payload_by_feed.get(feed_context.feed_key, SAMPLE_XML)
+        return BrokerPayload(xml_text=xml, source_name=f"{feed_context.feed_key}.xml")
+
+
+def _configured_db_with_connection_feeds(feed_keys: list[str]) -> FakeAutomationDatabase:
+    """Create a FakeAutomationDatabase with one account and the specified feeds."""
+    db = FakeAutomationDatabase()
+    db.connection_targets = [
+        _make_connection_target("account-uuid", "U100", connection_id="test-connection-id"),
+    ]
+    creds: dict[str, bytes] = {"flex_token": _encrypt_value("test-token")}
+    feeds = []
+    for fk in feed_keys:
+        creds[f"feed:{fk}:query_id"] = _encrypt_value(f"query-{fk}")
+        feeds.append(_make_feed_record(fk))
+    db.connection_credentials["test-connection-id"] = creds
+    db.connection_feeds["test-connection-id"] = feeds
+    return db
+
+
+def _make_accounts_dry_run_request(external_id: str):
+    """Create a dry-run AutomationRunRequest for a single account external ID."""
+    from portfolio_engine.automation.types import AutomationRunRequest
+    return AutomationRunRequest(
+        target_type="accounts",
+        integration_key="ibkr_flex_ws",
+        mode="dry-run",
+        requested_start_date=date(2024, 1, 1),
+        requested_end_date=date(2024, 1, 31),
+        account_external_ids=(external_id,),
+    )
+
+
+class DryRunMultiFeedTests(unittest.TestCase):
+    """Task 12: Dry-run fetches all enabled feeds per connection and aggregates results."""
+
+    def _run(self, request, db, adapter):
+        from portfolio_engine.automation.orchestrator import run_automation
+        with mock.patch.dict(os.environ, {"SUPERFOLIO_CREDENTIAL_MASTER_KEY": _TEST_MASTER_KEY}):
+            return run_automation(request, database=db, adapter=adapter)
+
+    def _find_child(self, db, child_id: str):
+        for f in db.finalized_children:
+            if f.automation_job_account_id == child_id:
+                return f
+        return None
+
+    def test_dry_run_fetches_all_enabled_feeds_for_connection(self) -> None:
+        """Dry-run with two feeds: adapter.fetch_feed_payload called for both in feed_key order."""
+        db = _configured_db_with_connection_feeds(["cash", "nav"])
+        adapter = FakeMultiFeedAdapter(
+            payload_by_feed={"cash": _MULTI_FEED_CASH_XML, "nav": _MULTI_FEED_NAV_XML}
+        )
+
+        result = self._run(_make_accounts_dry_run_request("U100"), db=db, adapter=adapter)
+
+        self.assertEqual(result.status, "succeeded")
+        self.assertEqual(adapter.fetched_feed_keys, ["cash", "nav"])
+        child = self._find_child(db, "child-1")
+        self.assertIsNotNone(child)
+        self.assertIn("feed_results", child.summary)
+        self.assertEqual(child.summary["feed_results"][0]["feed_key"], "cash")
+
+    def test_dry_run_partial_when_one_feed_fails(self) -> None:
+        """Dry-run with cash succeeds and nav fails: child and parent are partially_succeeded."""
+        db = _configured_db_with_connection_feeds(["cash", "nav"])
+        adapter = FakeMultiFeedAdapter(
+            payload_by_feed={"cash": _MULTI_FEED_CASH_XML},
+            failing_feed_keys={"nav"},
+        )
+
+        result = self._run(_make_accounts_dry_run_request("U100"), db=db, adapter=adapter)
+
+        self.assertEqual(result.status, "partially_succeeded")
+        child = self._find_child(db, "child-1")
+        self.assertIsNotNone(child)
+        self.assertEqual(child.status, "partially_succeeded")
+
+    def test_dry_run_child_failed_when_all_feeds_fail(self) -> None:
+        """Dry-run with all feeds failing: child status failed, parent status failed."""
+        db = _configured_db_with_connection_feeds(["cash", "nav"])
+        adapter = FakeMultiFeedAdapter(
+            payload_by_feed={},
+            failing_feed_keys={"cash", "nav"},
+        )
+
+        result = self._run(_make_accounts_dry_run_request("U100"), db=db, adapter=adapter)
+
+        self.assertEqual(result.status, "failed")
+        child = self._find_child(db, "child-1")
+        self.assertIsNotNone(child)
+        self.assertEqual(child.status, "failed")
+
+    def test_dry_run_feed_results_present_in_child_summary(self) -> None:
+        """Dry-run with one feed: child summary contains feed_results with one entry."""
+        db = _configured_db_with_connection_feeds(["cash"])
+        adapter = FakeMultiFeedAdapter(payload_by_feed={"cash": _MULTI_FEED_CASH_XML})
+
+        self._run(_make_accounts_dry_run_request("U100"), db=db, adapter=adapter)
+
+        child = self._find_child(db, "child-1")
+        self.assertIsNotNone(child)
+        self.assertIn("feed_results", child.summary)
+        self.assertEqual(len(child.summary["feed_results"]), 1)
+        self.assertEqual(child.summary["feed_results"][0]["feed_key"], "cash")
+
+    def test_dry_run_failed_feed_has_error_category_in_results(self) -> None:
+        """A failed feed entry in feed_results must have status=failed and error_category set."""
+        db = _configured_db_with_connection_feeds(["cash"])
+        adapter = FakeMultiFeedAdapter(
+            payload_by_feed={},
+            failing_feed_keys={"cash"},
+        )
+
+        self._run(_make_accounts_dry_run_request("U100"), db=db, adapter=adapter)
+
+        child = self._find_child(db, "child-1")
+        self.assertIsNotNone(child)
+        self.assertIn("feed_results", child.summary)
+        feed_result = child.summary["feed_results"][0]
+        self.assertEqual(feed_result["status"], "failed")
+        self.assertIn("error_category", feed_result)
+
+    def test_dry_run_feed_results_no_secrets(self) -> None:
+        """feed_results in child summary must not contain query_id or credential values."""
+        db = _configured_db_with_connection_feeds(["cash"])
+        adapter = FakeMultiFeedAdapter(
+            payload_by_feed={},
+            failing_feed_keys={"cash"},
+        )
+
+        self._run(_make_accounts_dry_run_request("U100"), db=db, adapter=adapter)
+
+        child = self._find_child(db, "child-1")
+        self.assertIsNotNone(child)
+        summary_str = str(child.summary)
+        self.assertNotIn("query_id", summary_str)
+        self.assertNotIn("query-cash", summary_str)
+
+    def test_dry_run_feed_keys_fetched_in_stable_order(self) -> None:
+        """Feeds must be fetched in stable (alphabetical) feed_key order."""
+        db = _configured_db_with_connection_feeds(["nav", "cash"])
+        adapter = FakeMultiFeedAdapter(
+            payload_by_feed={"cash": _MULTI_FEED_CASH_XML, "nav": _MULTI_FEED_NAV_XML}
+        )
+
+        self._run(_make_accounts_dry_run_request("U100"), db=db, adapter=adapter)
+
+        self.assertEqual(adapter.fetched_feed_keys, ["cash", "nav"])
+
+    def test_dry_run_succeeded_feed_has_status_succeeded_in_results(self) -> None:
+        """A succeeded feed entry in feed_results must have status=succeeded."""
+        db = _configured_db_with_connection_feeds(["cash"])
+        adapter = FakeMultiFeedAdapter(payload_by_feed={"cash": _MULTI_FEED_CASH_XML})
+
+        self._run(_make_accounts_dry_run_request("U100"), db=db, adapter=adapter)
+
+        child = self._find_child(db, "child-1")
+        self.assertIsNotNone(child)
+        feed_result = child.summary["feed_results"][0]
+        self.assertEqual(feed_result["status"], "succeeded")
+
+    def test_dry_run_mixed_feed_results_both_entries_present(self) -> None:
+        """With one success and one failure, feed_results has two entries."""
+        db = _configured_db_with_connection_feeds(["cash", "nav"])
+        adapter = FakeMultiFeedAdapter(
+            payload_by_feed={"cash": _MULTI_FEED_CASH_XML},
+            failing_feed_keys={"nav"},
+        )
+
+        self._run(_make_accounts_dry_run_request("U100"), db=db, adapter=adapter)
+
+        child = self._find_child(db, "child-1")
+        self.assertIsNotNone(child)
+        self.assertEqual(len(child.summary["feed_results"]), 2)
+        feed_keys = [fr["feed_key"] for fr in child.summary["feed_results"]]
+        self.assertIn("cash", feed_keys)
+        self.assertIn("nav", feed_keys)
+
+    def test_dry_run_child_summary_has_record_counts(self) -> None:
+        """Child summary for multi-feed dry-run must contain record_counts."""
+        db = _configured_db_with_connection_feeds(["cash"])
+        adapter = FakeMultiFeedAdapter(payload_by_feed={"cash": _MULTI_FEED_CASH_XML})
+
+        self._run(_make_accounts_dry_run_request("U100"), db=db, adapter=adapter)
+
+        child = self._find_child(db, "child-1")
+        self.assertIsNotNone(child)
+        self.assertIn("record_counts", child.summary)
+
+    def test_dry_run_marks_child_running_before_finalize(self) -> None:
+        """mark_automation_job_account_running must be called before finalize in multi-feed mode."""
+        db = _configured_db_with_connection_feeds(["cash"])
+        adapter = FakeMultiFeedAdapter(payload_by_feed={"cash": _MULTI_FEED_CASH_XML})
+
+        self._run(_make_accounts_dry_run_request("U100"), db=db, adapter=adapter)
+
+        self.assertGreaterEqual(len(db.running_children), 1)
+        mark_idx = db._event_log.index("mark_running:child-1")
+        finalize_idx = db._event_log.index("finalize_child:child-1")
+        self.assertLess(mark_idx, finalize_idx)
+
+    def test_dry_run_no_ingestion_run_created(self) -> None:
+        """Multi-feed dry-run must not create any ingestion runs."""
+        db = _configured_db_with_connection_feeds(["cash"])
+        adapter = FakeMultiFeedAdapter(payload_by_feed={"cash": _MULTI_FEED_CASH_XML})
+
+        self._run(_make_accounts_dry_run_request("U100"), db=db, adapter=adapter)
+
+        self.assertEqual(len(db.started_ingestion_runs), 0)
+
+
 if __name__ == "__main__":
     unittest.main()
