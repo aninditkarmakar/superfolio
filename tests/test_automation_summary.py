@@ -102,6 +102,91 @@ class BuildChildSummaryTests(unittest.TestCase):
         a["record_counts"]["cash_flows"]["supported"] = 42
         self.assertEqual(b["record_counts"]["cash_flows"]["supported"], 0)
 
+    def test_child_summary_includes_feed_results_without_secrets(self) -> None:
+        summary = build_child_summary(
+            error_category="feed_fetch_failed",
+            feed_results=[
+                {
+                    "feed_key": "daily",
+                    "display_name": "Daily",
+                    "status": "failed",
+                    "error_category": "feed_fetch_failed",
+                    "record_counts": empty_record_counts(),
+                }
+            ],
+        )
+
+        self.assertEqual(summary["feed_results"][0]["feed_key"], "daily")
+        self.assertNotIn("query_id", str(summary))
+
+    def test_feed_results_excludes_secret_fields(self) -> None:
+        """Secret-like fields must not appear in feed_results output."""
+        secret_fields = {
+            "query_id": "qid-123",
+            "credential": "cred-abc",
+            "ciphertext": "deadbeef",
+            "master_key": "mkey-secret",
+            "token": "tok-xyz",
+            "password": "hunter2",
+            "api_key": "apikey123",
+        }
+        feed_entry = {
+            "feed_key": "daily",
+            "display_name": "Daily NAV",
+            "status": "failed",
+            "error_category": "feed_fetch_failed",
+            "record_counts": empty_record_counts(),
+            **secret_fields,
+        }
+        summary = build_child_summary(feed_results=[feed_entry])
+        result_entry = summary["feed_results"][0]
+        for field, value in secret_fields.items():
+            self.assertNotIn(field, result_entry, f"Secret field '{field}' must not appear in feed_results")
+            self.assertNotIn(value, str(result_entry), f"Secret value for '{field}' must not appear in feed_results")
+
+    def test_feed_results_allows_safe_fields(self) -> None:
+        """Allowed non-secret fields must be preserved in feed_results output."""
+        summary = build_child_summary(
+            feed_results=[
+                {
+                    "feed_key": "cash",
+                    "display_name": "Cash Flow",
+                    "status": "succeeded",
+                    "error_category": None,
+                    "record_counts": empty_record_counts(),
+                }
+            ]
+        )
+        entry = summary["feed_results"][0]
+        self.assertEqual(entry["feed_key"], "cash")
+        self.assertEqual(entry["display_name"], "Cash Flow")
+        self.assertEqual(entry["status"], "succeeded")
+        self.assertIsNone(entry["error_category"])
+        self.assertIn("record_counts", entry)
+
+    def test_feed_results_message_is_sanitized(self) -> None:
+        """message field in feed_results must be sanitized before inclusion."""
+        summary = build_child_summary(
+            feed_results=[
+                {
+                    "feed_key": "daily",
+                    "display_name": "Daily",
+                    "status": "failed",
+                    "error_category": "feed_fetch_failed",
+                    "record_counts": empty_record_counts(),
+                    "message": "query_id=secret123 failed to connect",
+                }
+            ]
+        )
+        entry = summary["feed_results"][0]
+        self.assertIn("message", entry)
+        self.assertNotIn("secret123", entry["message"])
+
+    def test_no_feed_results_by_default(self) -> None:
+        """feed_results must not appear in summary when not provided."""
+        summary = build_child_summary()
+        self.assertNotIn("feed_results", summary)
+
 
 class BuildParentSummaryTests(unittest.TestCase):
     def test_account_counts_total(self) -> None:
@@ -304,6 +389,16 @@ class SanitizeErrorMessageTests(unittest.TestCase):
         self.assertIsNotNone(result)
         self.assertNotIn("ABCDE12345", result)
         self.assertIn("[redacted]", result)
+
+    def test_sanitizer_redacts_query_and_credential_labels(self) -> None:
+        message = "query_id=123 credential=abc ciphertext=deadbeef master_key=secret"
+
+        sanitized = sanitize_error_message(message)
+
+        self.assertNotIn("123", sanitized)
+        self.assertNotIn("abc", sanitized)
+        self.assertNotIn("deadbeef", sanitized)
+        self.assertNotIn("secret", sanitized)
 
     def test_truncates_to_500_chars(self) -> None:
         long_msg = "x" * 1000

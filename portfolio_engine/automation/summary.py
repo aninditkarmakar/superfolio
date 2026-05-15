@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from portfolio_engine.automation.sanitization import sanitize_error_message
+
 RECORD_TYPES = ("cash_flows", "daily_nav_snapshots")
 COUNT_KEYS = (
     "supported",
@@ -17,6 +19,24 @@ COUNT_KEYS = (
 def empty_record_counts() -> dict[str, dict[str, int]]:
     """Return a fresh nested dict of zero counts for all record types and count keys."""
     return {rt: {key: 0 for key in COUNT_KEYS} for rt in RECORD_TYPES}
+
+
+_FEED_RESULT_ALLOWED_FIELDS = frozenset(
+    {"feed_key", "display_name", "status", "error_category", "record_counts", "message"}
+)
+
+
+def _sanitize_feed_result(entry: dict[str, Any]) -> dict[str, Any]:
+    """Return a copy of entry with only allowed non-secret fields, sanitizing message."""
+    result: dict[str, Any] = {}
+    for field in _FEED_RESULT_ALLOWED_FIELDS:
+        if field not in entry:
+            continue
+        if field == "message":
+            result[field] = sanitize_error_message(entry[field])
+        else:
+            result[field] = entry[field]
+    return result
 
 
 def build_child_summary(
@@ -36,6 +56,7 @@ def build_child_summary(
     nav_skipped_other_account: int = 0,
     nav_conflicts: int = 0,
     error_category: str | None = None,
+    feed_results: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Build a sanitized child (account-level) summary dict with record_counts only."""
     counts: dict[str, dict[str, int]] = {
@@ -61,6 +82,8 @@ def build_child_summary(
     result: dict[str, Any] = {"record_counts": counts}
     if error_category is not None:
         result["error_category"] = error_category
+    if feed_results is not None:
+        result["feed_results"] = [_sanitize_feed_result(entry) for entry in feed_results]
     return result
 
 

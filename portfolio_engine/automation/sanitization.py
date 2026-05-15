@@ -12,7 +12,7 @@ _POSTGRES_URL_RE = re.compile(
 # Word boundaries ensure we only match standalone keywords (e.g. "key=", "api_key=")
 # and not keywords embedded in compound identifiers (e.g. "primary_key=", "monkey=").
 _SECRET_ASSIGNMENT_RE = re.compile(
-    r"\b(?:token|password|secret|api_key|key)\b\s*=\s*\S+",
+    r"\b(?:token|password|secret|api_key|key|query_id|flex_query_id|credential|ciphertext|master_key)\b\s*=\s*\S+",
     re.IGNORECASE,
 )
 
