@@ -377,5 +377,39 @@ class MigrationContractTests(unittest.TestCase):
         )
 
 
+class AutomationConnectionMigrationTests(unittest.TestCase):
+    def test_automation_layer_creates_connection_tables(self) -> None:
+        text = Path("migrations/deploy/create_automation_layer.sql").read_text(encoding="utf-8")
+
+        self.assertIn("CREATE TABLE public.integration_connections", text)
+        self.assertIn("CREATE TABLE public.integration_connection_credentials", text)
+        self.assertIn("CREATE TABLE public.integration_feeds", text)
+        self.assertIn("CREATE TABLE public.account_integration_assignments", text)
+        self.assertIn("connection_id UUID REFERENCES public.integration_connections(id)", text)
+
+    def test_automation_layer_enforces_connection_uniqueness(self) -> None:
+        text = Path("migrations/deploy/create_automation_layer.sql").read_text(encoding="utf-8")
+
+        self.assertIn("integration_connections_unique_name", text)
+        self.assertIn("integration_connection_credentials_active_unique", text)
+        self.assertIn("integration_feeds_unique_key", text)
+
+    def test_revert_drops_connection_tables(self) -> None:
+        text = Path("migrations/revert/create_automation_layer.sql").read_text(encoding="utf-8")
+
+        self.assertIn("DROP TABLE public.account_integration_assignments", text)
+        self.assertIn("DROP TABLE public.integration_connection_credentials", text)
+        self.assertIn("DROP TABLE public.integration_feeds", text)
+        self.assertIn("DROP TABLE public.integration_connections", text)
+
+    def test_verify_checks_connection_tables(self) -> None:
+        text = Path("migrations/verify/create_automation_layer.sql").read_text(encoding="utf-8")
+
+        self.assertIn("public.integration_connections", text)
+        self.assertIn("public.integration_connection_credentials", text)
+        self.assertIn("public.integration_feeds", text)
+        self.assertIn("public.account_integration_assignments", text)
+
+
 if __name__ == "__main__":
     unittest.main()

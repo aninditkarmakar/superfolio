@@ -2,6 +2,59 @@
 
 BEGIN;
 
+CREATE TABLE public.integration_connections (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    integration_key VARCHAR(100) NOT NULL,
+    brokerage_id UUID NOT NULL REFERENCES public.brokerages(id),
+    name VARCHAR(120) NOT NULL,
+    is_active BOOLEAN NOT NULL DEFAULT true,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CONSTRAINT integration_connections_key_not_blank_check CHECK (btrim(integration_key) <> ''),
+    CONSTRAINT integration_connections_name_not_blank_check CHECK (btrim(name) <> ''),
+    CONSTRAINT integration_connections_unique_name UNIQUE (brokerage_id, integration_key, name)
+);
+
+CREATE TABLE public.integration_connection_credentials (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    connection_id UUID NOT NULL REFERENCES public.integration_connections(id) ON DELETE CASCADE,
+    credential_name VARCHAR(200) NOT NULL,
+    ciphertext BYTEA NOT NULL,
+    encryption_key_id VARCHAR(100) NOT NULL,
+    encryption_version INTEGER NOT NULL,
+    is_active BOOLEAN NOT NULL DEFAULT true,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    rotated_at TIMESTAMPTZ,
+    CONSTRAINT integration_connection_credentials_name_not_blank_check CHECK (btrim(credential_name) <> ''),
+    CONSTRAINT integration_connection_credentials_key_id_not_blank_check CHECK (btrim(encryption_key_id) <> ''),
+    CONSTRAINT integration_connection_credentials_version_positive_check CHECK (encryption_version > 0)
+);
+
+CREATE UNIQUE INDEX integration_connection_credentials_active_unique
+    ON public.integration_connection_credentials (connection_id, credential_name)
+    WHERE is_active = true;
+
+CREATE TABLE public.integration_feeds (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    connection_id UUID NOT NULL REFERENCES public.integration_connections(id) ON DELETE CASCADE,
+    feed_key VARCHAR(100) NOT NULL,
+    display_name VARCHAR(120),
+    is_active BOOLEAN NOT NULL DEFAULT true,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CONSTRAINT integration_feeds_key_not_blank_check CHECK (btrim(feed_key) <> ''),
+    CONSTRAINT integration_feeds_key_no_colon_check CHECK (position(':' in feed_key) = 0),
+    CONSTRAINT integration_feeds_unique_key UNIQUE (connection_id, feed_key)
+);
+
+CREATE TABLE public.account_integration_assignments (
+    account_id UUID PRIMARY KEY REFERENCES public.accounts(id) ON DELETE CASCADE,
+    connection_id UUID NOT NULL REFERENCES public.integration_connections(id),
+    is_active BOOLEAN NOT NULL DEFAULT true,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
 CREATE TABLE public.automation_jobs (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     trigger_type VARCHAR(30) NOT NULL,
@@ -50,6 +103,7 @@ CREATE TABLE public.automation_job_accounts (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     automation_job_id UUID NOT NULL REFERENCES public.automation_jobs(id) ON DELETE CASCADE,
     account_id UUID NOT NULL REFERENCES public.accounts(id),
+    connection_id UUID REFERENCES public.integration_connections(id),
     status VARCHAR(30) NOT NULL,
     ingestion_run_id UUID REFERENCES public.ingestion_runs(id),
     summary JSONB,

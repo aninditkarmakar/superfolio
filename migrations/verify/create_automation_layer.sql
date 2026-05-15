@@ -1,12 +1,39 @@
 -- Verify superfolio:create_automation_layer on pg
 
+SELECT id, integration_key, brokerage_id, name, is_active, created_at, updated_at
+FROM public.integration_connections
+WHERE false;
+
+SELECT id, connection_id, credential_name, ciphertext, encryption_key_id,
+       encryption_version, is_active, created_at, rotated_at
+FROM public.integration_connection_credentials
+WHERE false;
+
+SELECT id, connection_id, feed_key, display_name, is_active, created_at, updated_at
+FROM public.integration_feeds
+WHERE false;
+
+SELECT account_id, connection_id, is_active, created_at, updated_at
+FROM public.account_integration_assignments
+WHERE false;
+
+SELECT 1 / (count(*) = 4)::int
+FROM information_schema.tables
+WHERE table_schema = 'public'
+  AND table_name IN (
+      'integration_connections',
+      'integration_connection_credentials',
+      'integration_feeds',
+      'account_integration_assignments'
+  );
+
 SELECT id, trigger_type, target_type, portfolio_id, integration_key, mode, status,
        summary, requested_start_date, requested_end_date, error_message,
        started_at, completed_at, created_at
 FROM public.automation_jobs
 WHERE false;
 
-SELECT id, automation_job_id, account_id, status, ingestion_run_id, summary,
+SELECT id, automation_job_id, account_id, connection_id, status, ingestion_run_id, summary,
        error_message, started_at, completed_at, created_at
 FROM public.automation_job_accounts
 WHERE false;
