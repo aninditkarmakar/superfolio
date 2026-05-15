@@ -324,5 +324,56 @@ class IbkrFlexClientLifecycleTests(unittest.TestCase):
             self.assertIs(ctx, client)
 
 
+import os
+import tempfile
+from pathlib import Path
+from unittest import mock
+
+
+class IbkrFlexClientDebugSaveTests(unittest.TestCase):
+    def _client_with_success(self, tmp_path: Path) -> tuple[IbkrFlexWebServiceClient, FakeTransport]:
+        transport = FakeTransport(
+            [
+                FakeHttpResponse(200, """<FlexStatementResponse><Status>Success</Status><ReferenceCode>secret-ref</ReferenceCode></FlexStatementResponse>"""),
+                FakeHttpResponse(200, VALID_FLEX_XML),
+            ]
+        )
+        client = IbkrFlexWebServiceClient(
+            transport=transport,
+            sleep=lambda seconds: None,
+            debug_raw_xml_dir=tmp_path,
+        )
+        return client, transport
+
+    def test_debug_save_writes_uuid_filename_without_secrets(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            client, _ = self._client_with_success(tmp_path)
+
+            client.fetch_report(
+                token="secret-token",
+                query_id="secret-query",
+                connection_id="conn/one",
+                feed_key="primary:feed",
+            )
+
+            files = list(tmp_path.glob("*.xml"))
+            self.assertEqual(len(files), 1)
+            self.assertTrue(files[0].name.startswith("conn-one-primary-feed-"))
+            self.assertNotIn("secret-token", files[0].name)
+            self.assertNotIn("secret-query", files[0].name)
+            self.assertNotIn("secret-ref", files[0].name)
+            self.assertEqual(files[0].read_text(encoding="utf-8"), VALID_FLEX_XML)
+
+    def test_debug_save_rejected_in_github_actions(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            with mock.patch.dict(os.environ, {"GITHUB_ACTIONS": "true"}):
+                with self.assertRaisesRegex(RuntimeError, "raw XML debug saves are not allowed"):
+                    IbkrFlexWebServiceClient(
+                        transport=FakeTransport([]),
+                        debug_raw_xml_dir=Path(tmp),
+                    )
+
+
 if __name__ == "__main__":
     unittest.main()
