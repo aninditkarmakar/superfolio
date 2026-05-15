@@ -135,6 +135,9 @@ CREATE INDEX automation_job_accounts_account_status_idx
 CREATE INDEX automation_job_accounts_ingestion_run_id_idx
     ON public.automation_job_accounts (ingestion_run_id);
 
+CREATE INDEX automation_job_accounts_connection_id_idx
+    ON public.automation_job_accounts (connection_id);
+
 CREATE FUNCTION public.create_automation_job(
     p_trigger_type TEXT,
     p_target_type TEXT,

@@ -418,6 +418,15 @@ class AutomationConnectionMigrationTests(unittest.TestCase):
             text,
         )
 
+    def test_deploy_creates_connection_id_index_on_job_accounts(self) -> None:
+        text = Path("migrations/deploy/create_automation_layer.sql").read_text(encoding="utf-8")
+
+        self.assertIn("automation_job_accounts_connection_id_idx", text)
+        self.assertIn(
+            "ON public.automation_job_accounts (connection_id)",
+            text,
+        )
+
     def test_verify_checks_connection_tables(self) -> None:
         text = Path("migrations/verify/create_automation_layer.sql").read_text(encoding="utf-8")
 
