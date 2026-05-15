@@ -34,6 +34,9 @@ CREATE UNIQUE INDEX integration_connection_credentials_active_unique
     ON public.integration_connection_credentials (connection_id, credential_name)
     WHERE is_active = true;
 
+CREATE INDEX integration_connection_credentials_connection_id_idx
+    ON public.integration_connection_credentials (connection_id);
+
 CREATE TABLE public.integration_feeds (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     connection_id UUID NOT NULL REFERENCES public.integration_connections(id) ON DELETE CASCADE,
