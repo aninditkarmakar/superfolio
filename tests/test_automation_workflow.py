@@ -40,12 +40,24 @@ class AutomationWorkflowTests(unittest.TestCase):
         self.assertIn("python scripts/run_automated_ingestion.py", text)
         self.assertIn("DATABASE_URL: ${{ secrets.DATABASE_URL }}", text)
 
-    def test_workflow_requires_master_key_secret(self) -> None:
-        text = Path(".github/workflows/manual-ingestion.yml").read_text(encoding="utf-8")
+    def test_job_env_master_key_mapping(self) -> None:
+        """Job-level env maps SUPERFOLIO_CREDENTIAL_MASTER_KEY via its namesake secret; no per-login vars."""
+        wf = self._parsed()
+        job_env = wf["jobs"]["ingest"].get("env", {})
 
-        self.assertIn("SUPERFOLIO_CREDENTIAL_MASTER_KEY", text)
-        self.assertNotIn("IBKR_FLEX_TOKEN:", text)
-        self.assertNotIn("IBKR_FLEX_QUERY_ID:", text)
+        self.assertEqual(
+            job_env.get("SUPERFOLIO_CREDENTIAL_MASTER_KEY"),
+            "${{ secrets.SUPERFOLIO_CREDENTIAL_MASTER_KEY }}",
+            "Job env must bind SUPERFOLIO_CREDENTIAL_MASTER_KEY to its namesake secret",
+        )
+        self.assertNotIn(
+            "IBKR_FLEX_TOKEN", job_env,
+            "Per-login secret IBKR_FLEX_TOKEN must not appear in job env",
+        )
+        self.assertNotIn(
+            "IBKR_FLEX_QUERY_ID", job_env,
+            "Per-login secret IBKR_FLEX_QUERY_ID must not appear in job env",
+        )
 
     def test_workflow_uses_master_key_not_per_login_secrets(self) -> None:
         text = Path(".github/workflows/manual-ingestion.yml").read_text(encoding="utf-8")
