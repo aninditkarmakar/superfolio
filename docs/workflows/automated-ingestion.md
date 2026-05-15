@@ -93,9 +93,11 @@ MY_FLEX_TOKEN="<token>" \
 MY_FLEX_QUERY_ID="<query-id>" \
   python scripts/manage_integration_connections.py set-credential \
     --connection-id <connection-id> \
-    --credential-name flex_query_id \
+    --credential-name feed:primary:query_id \
     --value-from-env MY_FLEX_QUERY_ID
 ```
+
+> **Credential naming for per-feed query IDs:** The orchestrator looks up each feed's Flex query ID using the key pattern `feed:{feed_key}:query_id`, where `{feed_key}` matches the value passed to `add-feed --feed-key` (e.g. `primary`). Using any other name (such as `flex_query_id`) will cause the orchestrator to skip the feed at runtime.
 
 Setting the same `credential_name` again rotates the previous value: the old row is deactivated and a new active row is inserted.
 
