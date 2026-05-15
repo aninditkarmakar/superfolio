@@ -73,3 +73,16 @@ FROM (
         (to_regprocedure('public.has_overlapping_automation_load(text,uuid,date,date,uuid)'))
 ) AS functions(signature)
 WHERE signature IS NOT NULL;
+
+SELECT 1 / (count(*) = 7)::int
+FROM (
+    VALUES
+        (to_regprocedure('public.create_integration_connection(text,text,text)')),
+        (to_regprocedure('public.set_integration_credential(uuid,text,bytea,text,integer)')),
+        (to_regprocedure('public.create_integration_feed(uuid,text,text)')),
+        (to_regprocedure('public.set_account_integration_assignment(text,text,uuid)')),
+        (to_regprocedure('public.validate_account_integration_assignments(text,text,text,text[])')),
+        (to_regprocedure('public.list_integration_connections()')),
+        (to_regprocedure('public.list_integration_feeds(uuid)'))
+) AS functions(signature)
+WHERE signature IS NOT NULL;

@@ -10,6 +10,7 @@ from typing import Any, get_type_hints
 from psycopg.types.json import Jsonb
 
 from portfolio_engine.database import (
+    AccountIntegrationAssignmentSet,
     AccountRegistration,
     AutomationAccountTarget,
     AutomationJobAccountAdd,
@@ -19,6 +20,11 @@ from portfolio_engine.database import (
     BulkIngestionSummary,
     DatabaseConfigurationError,
     IngestionRunStart,
+    IntegrationConnectionCreate,
+    IntegrationConnectionRecord,
+    IntegrationCredentialSet,
+    IntegrationFeedCreate,
+    IntegrationFeedRecord,
     SuperFolioDatabase,
     connect_database,
 )
@@ -61,6 +67,10 @@ class FakeConnection:
         self.commit_count = 0
         self.rollback_count = 0
         self.close_count = 0
+
+    @property
+    def statements(self) -> list[tuple[str, tuple[Any, ...]]]:
+        return self.cursor_instance.executed
 
     def cursor(self) -> FakeCursor:
         return self.cursor_instance
@@ -1099,6 +1109,231 @@ class AutomationDatabaseAdapterTests(unittest.TestCase):
             params,
             ("ibkr_flex_ws", "account-uuid", date(2024, 1, 1), date(2024, 1, 31), "exclude-job-uuid"),
         )
+
+
+class IntegrationConnectionAdapterTests(unittest.TestCase):
+    def test_create_integration_connection_calls_function(self) -> None:
+        connection = FakeConnection(row=("connection-uuid",))
+        db = SuperFolioDatabase(connection)
+
+        result = db.create_integration_connection(
+            IntegrationConnectionCreate(
+                integration_key="ibkr_flex_ws",
+                brokerage_code="IBKR",
+                name="IBKR Personal",
+            )
+        )
+
+        self.assertEqual(result, "connection-uuid")
+        self.assertIn("public.create_integration_connection", connection.statements[0][0])
+        self.assertEqual(connection.statements[0][1], ("ibkr_flex_ws", "IBKR", "IBKR Personal"))
+
+    def test_set_integration_credential_passes_ciphertext(self) -> None:
+        connection = FakeConnection(row=("credential-uuid",))
+        db = SuperFolioDatabase(connection)
+
+        result = db.set_integration_credential(
+            IntegrationCredentialSet(
+                connection_id="connection-uuid",
+                credential_name="flex_token",
+                ciphertext=b"ciphertext",
+                encryption_key_id="v1",
+                encryption_version=1,
+            )
+        )
+
+        self.assertEqual(result, "credential-uuid")
+        self.assertIn("public.set_integration_credential", connection.statements[0][0])
+        self.assertEqual(
+            connection.statements[0][1],
+            ("connection-uuid", "flex_token", b"ciphertext", "v1", 1),
+        )
+
+    def test_create_integration_feed_calls_function(self) -> None:
+        connection = FakeConnection(row=("feed-uuid",))
+        db = SuperFolioDatabase(connection)
+
+        result = db.create_integration_feed(
+            IntegrationFeedCreate(
+                connection_id="connection-uuid",
+                feed_key="ibkr_flex_ws:cash_flows",
+                display_name="Cash Flows",
+            )
+        )
+
+        self.assertEqual(result, "feed-uuid")
+        self.assertIn("public.create_integration_feed", connection.statements[0][0])
+        self.assertEqual(
+            connection.statements[0][1],
+            ("connection-uuid", "ibkr_flex_ws:cash_flows", "Cash Flows"),
+        )
+
+    def test_create_integration_feed_allows_null_display_name(self) -> None:
+        connection = FakeConnection(row=("feed-uuid",))
+        db = SuperFolioDatabase(connection)
+
+        db.create_integration_feed(
+            IntegrationFeedCreate(
+                connection_id="connection-uuid",
+                feed_key="ibkr_flex_ws:cash_flows",
+            )
+        )
+
+        self.assertIsNone(connection.statements[0][1][2])
+
+    def test_set_account_integration_assignment_calls_function(self) -> None:
+        connection = FakeConnection(row=("account-uuid",))
+        db = SuperFolioDatabase(connection)
+
+        result = db.set_account_integration_assignment(
+            AccountIntegrationAssignmentSet(
+                brokerage_code="IBKR",
+                account_external_id="U100",
+                connection_id="connection-uuid",
+            )
+        )
+
+        self.assertEqual(result, "account-uuid")
+        self.assertIn("public.set_account_integration_assignment", connection.statements[0][0])
+        self.assertEqual(
+            connection.statements[0][1],
+            ("IBKR", "U100", "connection-uuid"),
+        )
+
+    def test_validate_account_integration_assignments_returns_list(self) -> None:
+        connection = FakeConnection(rows=[("U101",), ("U102",)])
+        db = SuperFolioDatabase(connection)
+
+        result = db.validate_account_integration_assignments(
+            target_type="portfolio",
+            portfolio_name="All Accounts",
+            brokerage_code="IBKR",
+            account_external_ids=[],
+        )
+
+        self.assertEqual(result, ["U101", "U102"])
+        self.assertIn("public.validate_account_integration_assignments", connection.statements[0][0])
+        self.assertEqual(
+            connection.statements[0][1],
+            ("portfolio", "All Accounts", "IBKR", []),
+        )
+
+    def test_validate_account_integration_assignments_accounts_target(self) -> None:
+        connection = FakeConnection(rows=[("U200",)])
+        db = SuperFolioDatabase(connection)
+
+        result = db.validate_account_integration_assignments(
+            target_type="accounts",
+            portfolio_name=None,
+            brokerage_code="IBKR",
+            account_external_ids=["U100", "U200"],
+        )
+
+        self.assertEqual(result, ["U200"])
+        self.assertEqual(
+            connection.statements[0][1],
+            ("accounts", None, "IBKR", ["U100", "U200"]),
+        )
+
+    def test_list_integration_connections_maps_rows(self) -> None:
+        from datetime import timezone
+        now = datetime(2026, 5, 1, 12, 0, tzinfo=timezone.utc)
+        connection = FakeConnection(rows=[
+            ("conn-uuid", "ibkr_flex_ws", "IBKR", "IBKR Personal", True, now, now),
+        ])
+        db = SuperFolioDatabase(connection)
+
+        results = db.list_integration_connections()
+
+        self.assertEqual(len(results), 1)
+        self.assertIsInstance(results[0], IntegrationConnectionRecord)
+        self.assertEqual(results[0].id, "conn-uuid")
+        self.assertEqual(results[0].integration_key, "ibkr_flex_ws")
+        self.assertEqual(results[0].brokerage_code, "IBKR")
+        self.assertEqual(results[0].name, "IBKR Personal")
+        self.assertTrue(results[0].is_active)
+        self.assertIn("public.list_integration_connections", connection.statements[0][0])
+
+    def test_list_integration_connections_returns_empty_list(self) -> None:
+        connection = FakeConnection(rows=[])
+        db = SuperFolioDatabase(connection)
+
+        results = db.list_integration_connections()
+
+        self.assertEqual(results, [])
+
+    def test_list_integration_feeds_maps_rows(self) -> None:
+        from datetime import timezone
+        now = datetime(2026, 5, 1, 12, 0, tzinfo=timezone.utc)
+        connection = FakeConnection(rows=[
+            ("feed-uuid", "conn-uuid", "cash_flows", "Cash Flows", True, now, now),
+        ])
+        db = SuperFolioDatabase(connection)
+
+        results = db.list_integration_feeds("conn-uuid")
+
+        self.assertEqual(len(results), 1)
+        self.assertIsInstance(results[0], IntegrationFeedRecord)
+        self.assertEqual(results[0].id, "feed-uuid")
+        self.assertEqual(results[0].connection_id, "conn-uuid")
+        self.assertEqual(results[0].feed_key, "cash_flows")
+        self.assertEqual(results[0].display_name, "Cash Flows")
+        self.assertTrue(results[0].is_active)
+        self.assertIn("public.list_integration_feeds", connection.statements[0][0])
+        self.assertEqual(connection.statements[0][1], ("conn-uuid",))
+
+    def test_list_integration_feeds_allows_null_display_name(self) -> None:
+        from datetime import timezone
+        now = datetime(2026, 5, 1, 12, 0, tzinfo=timezone.utc)
+        connection = FakeConnection(rows=[
+            ("feed-uuid", "conn-uuid", "cash_flows", None, True, now, now),
+        ])
+        db = SuperFolioDatabase(connection)
+
+        results = db.list_integration_feeds("conn-uuid")
+
+        self.assertIsNone(results[0].display_name)
+
+    def test_integration_connection_create_is_immutable(self) -> None:
+        request = IntegrationConnectionCreate(
+            integration_key="ibkr_flex_ws",
+            brokerage_code="IBKR",
+            name="IBKR Personal",
+        )
+
+        with self.assertRaises(FrozenInstanceError):
+            request.name = "Other"  # type: ignore[misc]
+
+    def test_integration_credential_set_is_immutable(self) -> None:
+        request = IntegrationCredentialSet(
+            connection_id="conn-uuid",
+            credential_name="flex_token",
+            ciphertext=b"secret",
+            encryption_key_id="v1",
+            encryption_version=1,
+        )
+
+        with self.assertRaises(FrozenInstanceError):
+            request.ciphertext = b"other"  # type: ignore[misc]
+
+    def test_integration_feed_create_is_immutable(self) -> None:
+        request = IntegrationFeedCreate(
+            connection_id="conn-uuid",
+            feed_key="cash_flows",
+        )
+
+        with self.assertRaises(FrozenInstanceError):
+            request.feed_key = "nav"  # type: ignore[misc]
+
+    def test_account_integration_assignment_set_is_immutable(self) -> None:
+        request = AccountIntegrationAssignmentSet(
+            brokerage_code="IBKR",
+            account_external_id="U100",
+            connection_id="conn-uuid",
+        )
+
+        with self.assertRaises(FrozenInstanceError):
+            request.connection_id = "other-uuid"  # type: ignore[misc]
 
 
 if __name__ == "__main__":

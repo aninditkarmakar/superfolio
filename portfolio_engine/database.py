@@ -111,6 +111,58 @@ class AutomationAccountTarget:
     display_name: str | None
 
 
+@dataclass(frozen=True)
+class IntegrationConnectionCreate:
+    integration_key: str
+    brokerage_code: str
+    name: str
+
+
+@dataclass(frozen=True)
+class IntegrationCredentialSet:
+    connection_id: str
+    credential_name: str
+    ciphertext: bytes
+    encryption_key_id: str
+    encryption_version: int
+
+
+@dataclass(frozen=True)
+class IntegrationFeedCreate:
+    connection_id: str
+    feed_key: str
+    display_name: str | None = None
+
+
+@dataclass(frozen=True)
+class AccountIntegrationAssignmentSet:
+    brokerage_code: str
+    account_external_id: str
+    connection_id: str
+
+
+@dataclass(frozen=True)
+class IntegrationConnectionRecord:
+    id: str
+    integration_key: str
+    brokerage_code: str
+    name: str
+    is_active: bool
+    created_at: datetime
+    updated_at: datetime
+
+
+@dataclass(frozen=True)
+class IntegrationFeedRecord:
+    id: str
+    connection_id: str
+    feed_key: str
+    display_name: str | None
+    is_active: bool
+    created_at: datetime
+    updated_at: datetime
+
+
 class SuperFolioDatabase:
     def __init__(self, connection: ConnectionLike) -> None:
         self._connection = connection
@@ -263,6 +315,68 @@ class SuperFolioDatabase:
             (integration_key, account_id, requested_start_date, requested_end_date, exclude_automation_job_id),
         )
         return bool(row[0])
+
+    def create_integration_connection(self, request: IntegrationConnectionCreate) -> str:
+        row = self._fetch_one(
+            "SELECT public.create_integration_connection(%s, %s, %s)",
+            (request.integration_key, request.brokerage_code, request.name),
+        )
+        return str(row[0])
+
+    def set_integration_credential(self, request: IntegrationCredentialSet) -> str:
+        row = self._fetch_one(
+            "SELECT public.set_integration_credential(%s, %s, %s, %s, %s)",
+            (
+                request.connection_id,
+                request.credential_name,
+                request.ciphertext,
+                request.encryption_key_id,
+                request.encryption_version,
+            ),
+        )
+        return str(row[0])
+
+    def create_integration_feed(self, request: IntegrationFeedCreate) -> str:
+        row = self._fetch_one(
+            "SELECT public.create_integration_feed(%s, %s, %s)",
+            (request.connection_id, request.feed_key, request.display_name),
+        )
+        return str(row[0])
+
+    def set_account_integration_assignment(self, request: AccountIntegrationAssignmentSet) -> str:
+        row = self._fetch_one(
+            "SELECT public.set_account_integration_assignment(%s, %s, %s)",
+            (request.brokerage_code, request.account_external_id, request.connection_id),
+        )
+        return str(row[0])
+
+    def validate_account_integration_assignments(
+        self,
+        *,
+        target_type: str,
+        portfolio_name: str | None,
+        brokerage_code: str,
+        account_external_ids: list[str],
+    ) -> list[str]:
+        rows = self._fetch_all(
+            "SELECT * FROM public.validate_account_integration_assignments(%s, %s, %s, %s)",
+            (target_type, portfolio_name, brokerage_code, account_external_ids),
+        )
+        return [str(row[0]) for row in rows]
+
+    def list_integration_connections(self) -> list[IntegrationConnectionRecord]:
+        rows = self._fetch_all(
+            "SELECT * FROM public.list_integration_connections()",
+            (),
+        )
+        return [_integration_connection_record_from_row(row) for row in rows]
+
+    def list_integration_feeds(self, connection_id: str) -> list[IntegrationFeedRecord]:
+        rows = self._fetch_all(
+            "SELECT * FROM public.list_integration_feeds(%s)",
+            (connection_id,),
+        )
+        return [_integration_feed_record_from_row(row) for row in rows]
 
     def bulk_ingest_cash_flows(
         self, ingestion_run_id: str, records: list[dict[str, Any]]
@@ -601,6 +715,30 @@ def _automation_account_target_from_row(row: tuple[Any, ...]) -> AutomationAccou
         account_external_id=str(row[2]),
         base_currency=str(row[3]),
         display_name=None if row[4] is None else str(row[4]),
+    )
+
+
+def _integration_connection_record_from_row(row: tuple[Any, ...]) -> IntegrationConnectionRecord:
+    return IntegrationConnectionRecord(
+        id=str(row[0]),
+        integration_key=str(row[1]),
+        brokerage_code=str(row[2]),
+        name=str(row[3]),
+        is_active=bool(row[4]),
+        created_at=row[5],
+        updated_at=row[6],
+    )
+
+
+def _integration_feed_record_from_row(row: tuple[Any, ...]) -> IntegrationFeedRecord:
+    return IntegrationFeedRecord(
+        id=str(row[0]),
+        connection_id=str(row[1]),
+        feed_key=str(row[2]),
+        display_name=None if row[3] is None else str(row[3]),
+        is_active=bool(row[4]),
+        created_at=row[5],
+        updated_at=row[6],
     )
 
 

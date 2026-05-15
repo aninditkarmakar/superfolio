@@ -2,6 +2,14 @@
 
 BEGIN;
 
+DROP FUNCTION IF EXISTS public.list_integration_feeds(UUID);
+DROP FUNCTION IF EXISTS public.list_integration_connections();
+DROP FUNCTION IF EXISTS public.validate_account_integration_assignments(TEXT, TEXT, TEXT, TEXT[]);
+DROP FUNCTION IF EXISTS public.set_account_integration_assignment(TEXT, TEXT, UUID);
+DROP FUNCTION IF EXISTS public.create_integration_feed(UUID, TEXT, TEXT);
+DROP FUNCTION IF EXISTS public.set_integration_credential(UUID, TEXT, BYTEA, TEXT, INTEGER);
+DROP FUNCTION IF EXISTS public.create_integration_connection(TEXT, TEXT, TEXT);
+
 DROP FUNCTION IF EXISTS public.has_overlapping_automation_load(TEXT, UUID, DATE, DATE, UUID);
 DROP FUNCTION IF EXISTS public.fail_stale_automation_runs(TIMESTAMPTZ, TEXT);
 DROP FUNCTION IF EXISTS public.resolve_automation_account_targets(TEXT, TEXT[]);

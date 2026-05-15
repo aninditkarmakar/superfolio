@@ -445,5 +445,173 @@ class AutomationConnectionMigrationTests(unittest.TestCase):
         self.assertIn("public.account_integration_assignments", text)
 
 
+class IntegrationConnectionFunctionTests(unittest.TestCase):
+    """Task 3: Tests for connection management PostgreSQL functions."""
+
+    DEPLOY = Path("migrations/deploy/create_automation_layer.sql")
+    REVERT = Path("migrations/revert/create_automation_layer.sql")
+    VERIFY = Path("migrations/verify/create_automation_layer.sql")
+
+    def test_deploy_defines_create_integration_connection(self) -> None:
+        sql = self.DEPLOY.read_text(encoding="utf-8")
+
+        self.assertIn("CREATE FUNCTION public.create_integration_connection", sql)
+        self.assertIn("p_integration_key TEXT", sql)
+        self.assertIn("p_brokerage_code TEXT", sql)
+        self.assertIn("p_name TEXT", sql)
+        self.assertIn("RETURNS UUID", sql)
+
+    def test_deploy_create_connection_validates_blank_integration_key(self) -> None:
+        sql = self.DEPLOY.read_text(encoding="utf-8")
+
+        self.assertIn("integration_key must not be blank", sql)
+
+    def test_deploy_create_connection_validates_blank_name(self) -> None:
+        sql = self.DEPLOY.read_text(encoding="utf-8")
+
+        self.assertIn("connection name must not be blank", sql)
+
+    def test_deploy_create_connection_looks_up_active_brokerage(self) -> None:
+        sql = self.DEPLOY.read_text(encoding="utf-8")
+
+        self.assertIn("Active brokerage not found for code:", sql)
+        self.assertIn("b.is_active = true", sql)
+
+    def test_deploy_defines_set_integration_credential(self) -> None:
+        sql = self.DEPLOY.read_text(encoding="utf-8")
+
+        self.assertIn("CREATE FUNCTION public.set_integration_credential", sql)
+        self.assertIn("p_connection_id UUID", sql)
+        self.assertIn("p_credential_name TEXT", sql)
+        self.assertIn("p_ciphertext BYTEA", sql)
+        self.assertIn("p_encryption_key_id TEXT", sql)
+        self.assertIn("p_encryption_version INTEGER", sql)
+        self.assertIn("RETURNS UUID", sql)
+
+    def test_deploy_set_credential_rotates_existing_active_credential(self) -> None:
+        sql = self.DEPLOY.read_text(encoding="utf-8")
+
+        self.assertIn("is_active = false", sql)
+        self.assertIn("rotated_at = now()", sql)
+
+    def test_deploy_defines_create_integration_feed(self) -> None:
+        sql = self.DEPLOY.read_text(encoding="utf-8")
+
+        self.assertIn("CREATE FUNCTION public.create_integration_feed", sql)
+        self.assertIn("p_feed_key TEXT", sql)
+        self.assertIn("p_display_name TEXT DEFAULT NULL", sql)
+        self.assertIn("RETURNS UUID", sql)
+
+    def test_deploy_create_feed_validates_blank_feed_key(self) -> None:
+        sql = self.DEPLOY.read_text(encoding="utf-8")
+
+        self.assertIn("feed_key must not be blank", sql)
+
+    def test_deploy_defines_set_account_integration_assignment(self) -> None:
+        sql = self.DEPLOY.read_text(encoding="utf-8")
+
+        self.assertIn("CREATE FUNCTION public.set_account_integration_assignment", sql)
+        self.assertIn("p_account_external_id TEXT", sql)
+        self.assertIn("RETURNS UUID", sql)
+
+    def test_deploy_assignment_validates_brokerage_match(self) -> None:
+        sql = self.DEPLOY.read_text(encoding="utf-8")
+
+        self.assertIn("Account brokerage does not match integration connection brokerage", sql)
+
+    def test_deploy_assignment_upserts_on_conflict(self) -> None:
+        sql = self.DEPLOY.read_text(encoding="utf-8")
+
+        self.assertIn("ON CONFLICT (account_id) DO UPDATE", sql)
+
+    def test_deploy_defines_validate_account_integration_assignments(self) -> None:
+        sql = self.DEPLOY.read_text(encoding="utf-8")
+
+        self.assertIn("CREATE FUNCTION public.validate_account_integration_assignments", sql)
+        self.assertIn("p_target_type TEXT", sql)
+        self.assertIn("p_portfolio_name TEXT", sql)
+        self.assertIn("RETURNS TABLE (account_external_id TEXT)", sql)
+
+    def test_deploy_defines_list_integration_connections(self) -> None:
+        sql = self.DEPLOY.read_text(encoding="utf-8")
+
+        self.assertIn("CREATE FUNCTION public.list_integration_connections()", sql)
+
+    def test_deploy_defines_list_integration_feeds(self) -> None:
+        sql = self.DEPLOY.read_text(encoding="utf-8")
+
+        self.assertIn("CREATE FUNCTION public.list_integration_feeds(p_connection_id UUID)", sql)
+
+    def test_revert_drops_create_integration_connection(self) -> None:
+        sql = self.REVERT.read_text(encoding="utf-8")
+
+        self.assertIn("DROP FUNCTION IF EXISTS public.create_integration_connection(TEXT, TEXT, TEXT);", sql)
+
+    def test_revert_drops_set_integration_credential(self) -> None:
+        sql = self.REVERT.read_text(encoding="utf-8")
+
+        self.assertIn(
+            "DROP FUNCTION IF EXISTS public.set_integration_credential(UUID, TEXT, BYTEA, TEXT, INTEGER);",
+            sql,
+        )
+
+    def test_revert_drops_create_integration_feed(self) -> None:
+        sql = self.REVERT.read_text(encoding="utf-8")
+
+        self.assertIn("DROP FUNCTION IF EXISTS public.create_integration_feed(UUID, TEXT, TEXT);", sql)
+
+    def test_revert_drops_set_account_integration_assignment(self) -> None:
+        sql = self.REVERT.read_text(encoding="utf-8")
+
+        self.assertIn(
+            "DROP FUNCTION IF EXISTS public.set_account_integration_assignment(TEXT, TEXT, UUID);",
+            sql,
+        )
+
+    def test_revert_drops_validate_account_integration_assignments(self) -> None:
+        sql = self.REVERT.read_text(encoding="utf-8")
+
+        self.assertIn(
+            "DROP FUNCTION IF EXISTS public.validate_account_integration_assignments(TEXT, TEXT, TEXT, TEXT[]);",
+            sql,
+        )
+
+    def test_revert_drops_list_integration_connections(self) -> None:
+        sql = self.REVERT.read_text(encoding="utf-8")
+
+        self.assertIn("DROP FUNCTION IF EXISTS public.list_integration_connections();", sql)
+
+    def test_revert_drops_list_integration_feeds(self) -> None:
+        sql = self.REVERT.read_text(encoding="utf-8")
+
+        self.assertIn("DROP FUNCTION IF EXISTS public.list_integration_feeds(UUID);", sql)
+
+    def test_revert_drops_connection_functions_before_tables(self) -> None:
+        sql = self.REVERT.read_text(encoding="utf-8")
+
+        func_pos = sql.index("DROP FUNCTION IF EXISTS public.create_integration_connection")
+        table_pos = sql.index("DROP TABLE IF EXISTS public.integration_connections")
+        self.assertLess(func_pos, table_pos)
+
+    def test_verify_checks_connection_management_functions(self) -> None:
+        sql = self.VERIFY.read_text(encoding="utf-8")
+
+        self.assertIn("to_regprocedure('public.create_integration_connection(text,text,text)')", sql)
+        self.assertIn("to_regprocedure('public.set_integration_credential(uuid,text,bytea,text,integer)')", sql)
+        self.assertIn("to_regprocedure('public.create_integration_feed(uuid,text,text)')", sql)
+        self.assertIn("to_regprocedure('public.set_account_integration_assignment(text,text,uuid)')", sql)
+        self.assertIn(
+            "to_regprocedure('public.validate_account_integration_assignments(text,text,text,text[])')",
+            sql,
+        )
+        self.assertIn("to_regprocedure('public.list_integration_connections()')", sql)
+        self.assertIn("to_regprocedure('public.list_integration_feeds(uuid)')", sql)
+
+    def test_verify_uses_error_raising_count_style_for_connection_functions(self) -> None:
+        sql = self.VERIFY.read_text(encoding="utf-8")
+
+        self.assertIn("count(*) = 7", sql)
+
+
 if __name__ == "__main__":
     unittest.main()

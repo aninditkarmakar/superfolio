@@ -470,4 +470,260 @@ AS $$
     );
 $$;
 
+CREATE FUNCTION public.create_integration_connection(
+    p_integration_key TEXT,
+    p_brokerage_code TEXT,
+    p_name TEXT
+)
+RETURNS UUID
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    v_connection_id UUID;
+    v_brokerage_id  UUID;
+    v_integration_key TEXT;
+    v_name TEXT;
+BEGIN
+    v_integration_key := lower(btrim(p_integration_key));
+    v_name := btrim(p_name);
+
+    IF v_integration_key = '' THEN
+        RAISE EXCEPTION 'integration_key must not be blank';
+    END IF;
+    IF v_name = '' THEN
+        RAISE EXCEPTION 'connection name must not be blank';
+    END IF;
+
+    SELECT id INTO v_brokerage_id
+    FROM public.brokerages
+    WHERE code = upper(btrim(p_brokerage_code))
+      AND is_active = true;
+
+    IF v_brokerage_id IS NULL THEN
+        RAISE EXCEPTION 'Active brokerage not found for code: %', p_brokerage_code;
+    END IF;
+
+    INSERT INTO public.integration_connections (integration_key, brokerage_id, name)
+    VALUES (v_integration_key, v_brokerage_id, v_name)
+    RETURNING id INTO v_connection_id;
+
+    RETURN v_connection_id;
+END;
+$$;
+
+CREATE FUNCTION public.set_integration_credential(
+    p_connection_id UUID,
+    p_credential_name TEXT,
+    p_ciphertext BYTEA,
+    p_encryption_key_id TEXT,
+    p_encryption_version INTEGER
+)
+RETURNS UUID
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    v_credential_id UUID;
+BEGIN
+    UPDATE public.integration_connection_credentials
+    SET is_active = false,
+        rotated_at = now()
+    WHERE connection_id = p_connection_id
+      AND credential_name = btrim(p_credential_name)
+      AND is_active = true;
+
+    INSERT INTO public.integration_connection_credentials (
+        connection_id,
+        credential_name,
+        ciphertext,
+        encryption_key_id,
+        encryption_version,
+        is_active
+    )
+    VALUES (
+        p_connection_id,
+        btrim(p_credential_name),
+        p_ciphertext,
+        btrim(p_encryption_key_id),
+        p_encryption_version,
+        true
+    )
+    RETURNING id INTO v_credential_id;
+
+    RETURN v_credential_id;
+END;
+$$;
+
+CREATE FUNCTION public.create_integration_feed(
+    p_connection_id UUID,
+    p_feed_key TEXT,
+    p_display_name TEXT DEFAULT NULL
+)
+RETURNS UUID
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    v_feed_id UUID;
+    v_feed_key TEXT;
+    v_display_name TEXT;
+BEGIN
+    v_feed_key := btrim(p_feed_key);
+    v_display_name := CASE WHEN p_display_name IS NULL THEN NULL ELSE NULLIF(btrim(p_display_name), '') END;
+
+    IF v_feed_key = '' THEN
+        RAISE EXCEPTION 'feed_key must not be blank';
+    END IF;
+
+    INSERT INTO public.integration_feeds (connection_id, feed_key, display_name)
+    VALUES (p_connection_id, v_feed_key, v_display_name)
+    RETURNING id INTO v_feed_id;
+
+    RETURN v_feed_id;
+END;
+$$;
+
+CREATE FUNCTION public.set_account_integration_assignment(
+    p_brokerage_code TEXT,
+    p_account_external_id TEXT,
+    p_connection_id UUID
+)
+RETURNS UUID
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    v_account_id           UUID;
+    v_account_brokerage_id UUID;
+    v_connection_brokerage_id UUID;
+BEGIN
+    SELECT a.id, a.brokerage_id
+    INTO v_account_id, v_account_brokerage_id
+    FROM public.accounts a
+    JOIN public.brokerages b ON b.id = a.brokerage_id
+    WHERE b.code = upper(btrim(p_brokerage_code))
+      AND b.is_active = true
+      AND a.external_id = btrim(p_account_external_id)
+      AND a.is_active = true;
+
+    IF v_account_id IS NULL THEN
+        RAISE EXCEPTION 'Active account % not found for brokerage %',
+            p_account_external_id, p_brokerage_code;
+    END IF;
+
+    SELECT brokerage_id INTO v_connection_brokerage_id
+    FROM public.integration_connections
+    WHERE id = p_connection_id;
+
+    IF v_connection_brokerage_id IS NULL THEN
+        RAISE EXCEPTION 'Integration connection % not found', p_connection_id;
+    END IF;
+
+    IF v_account_brokerage_id <> v_connection_brokerage_id THEN
+        RAISE EXCEPTION 'Account brokerage does not match integration connection brokerage';
+    END IF;
+
+    INSERT INTO public.account_integration_assignments (account_id, connection_id, is_active)
+    VALUES (v_account_id, p_connection_id, true)
+    ON CONFLICT (account_id) DO UPDATE
+        SET connection_id = EXCLUDED.connection_id,
+            is_active     = true,
+            updated_at    = now();
+
+    RETURN v_account_id;
+END;
+$$;
+
+CREATE FUNCTION public.validate_account_integration_assignments(
+    p_target_type TEXT,
+    p_portfolio_name TEXT,
+    p_brokerage_code TEXT,
+    p_account_external_ids TEXT[]
+)
+RETURNS TABLE (account_external_id TEXT)
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    IF btrim(coalesce(p_brokerage_code, '')) = '' THEN
+        RAISE EXCEPTION 'validate_account_integration_assignments requires brokerage_code';
+    END IF;
+
+    IF lower(btrim(p_target_type)) = 'portfolio' THEN
+        RETURN QUERY
+        SELECT a.external_id::TEXT
+        FROM public.portfolio_accounts pa
+        JOIN public.portfolios p ON p.id = pa.portfolio_id
+        JOIN public.accounts a ON a.id = pa.account_id
+        JOIN public.brokerages b ON b.id = a.brokerage_id
+        WHERE p.name = btrim(p_portfolio_name)
+          AND p.is_active = true
+          AND b.code = upper(btrim(p_brokerage_code))
+          AND b.is_active = true
+          AND a.is_active = true
+          AND NOT EXISTS (
+              SELECT 1
+              FROM public.account_integration_assignments aia
+              WHERE aia.account_id = a.id
+                AND aia.is_active = true
+          )
+        ORDER BY a.external_id;
+    ELSE
+        RETURN QUERY
+        SELECT a.external_id::TEXT
+        FROM public.accounts a
+        JOIN public.brokerages b ON b.id = a.brokerage_id
+        WHERE b.code = upper(btrim(p_brokerage_code))
+          AND b.is_active = true
+          AND a.is_active = true
+          AND a.external_id IN (
+              SELECT btrim(requested.ext_id)
+              FROM unnest(p_account_external_ids) AS requested(ext_id)
+              WHERE btrim(requested.ext_id) <> ''
+          )
+          AND NOT EXISTS (
+              SELECT 1
+              FROM public.account_integration_assignments aia
+              WHERE aia.account_id = a.id
+                AND aia.is_active = true
+          )
+        ORDER BY a.external_id;
+    END IF;
+END;
+$$;
+
+CREATE FUNCTION public.list_integration_connections()
+RETURNS TABLE (
+    id UUID,
+    integration_key TEXT,
+    brokerage_code TEXT,
+    name TEXT,
+    is_active BOOLEAN,
+    created_at TIMESTAMPTZ,
+    updated_at TIMESTAMPTZ
+)
+LANGUAGE sql
+AS $$
+    SELECT c.id, c.integration_key::TEXT, b.code::TEXT, c.name::TEXT,
+           c.is_active, c.created_at, c.updated_at
+    FROM public.integration_connections c
+    JOIN public.brokerages b ON b.id = c.brokerage_id
+    ORDER BY c.name;
+$$;
+
+CREATE FUNCTION public.list_integration_feeds(p_connection_id UUID)
+RETURNS TABLE (
+    id UUID,
+    connection_id UUID,
+    feed_key TEXT,
+    display_name TEXT,
+    is_active BOOLEAN,
+    created_at TIMESTAMPTZ,
+    updated_at TIMESTAMPTZ
+)
+LANGUAGE sql
+AS $$
+    SELECT id, connection_id, feed_key::TEXT, display_name::TEXT,
+           is_active, created_at, updated_at
+    FROM public.integration_feeds
+    WHERE connection_id = p_connection_id
+    ORDER BY feed_key;
+$$;
+
 COMMIT;
