@@ -223,6 +223,13 @@ integrations:
         with self.assertRaisesRegex(ValueError, "integration 'test' field required_env_keys contains a null item"):
             load_integration_config("test", path=path)
 
+    def test_ibkr_config_no_longer_requires_per_login_secrets(self) -> None:
+        config = load_integration_config("ibkr_flex_ws")
+
+        self.assertIn("SUPERFOLIO_CREDENTIAL_MASTER_KEY", config.required_env_keys)
+        self.assertNotIn("IBKR_FLEX_TOKEN", config.required_env_keys)
+        self.assertNotIn("IBKR_FLEX_QUERY_ID", config.required_env_keys)
+
     def _write_config(self, contents: str) -> Path:
         directory = TemporaryDirectory()
         self.addCleanup(directory.cleanup)

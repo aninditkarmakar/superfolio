@@ -8,6 +8,5 @@ integrations:
       - load
     required_env_keys:
       - DATABASE_URL
-      - IBKR_FLEX_TOKEN
-      - IBKR_FLEX_QUERY_ID
+      - SUPERFOLIO_CREDENTIAL_MASTER_KEY
     stale_running_timeout_minutes: 120

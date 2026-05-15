@@ -48,8 +48,7 @@ jobs:
 
     env:
       DATABASE_URL: ${{ secrets.DATABASE_URL }}
-      IBKR_FLEX_TOKEN: ${{ secrets.IBKR_FLEX_TOKEN }}
-      IBKR_FLEX_QUERY_ID: ${{ secrets.IBKR_FLEX_QUERY_ID }}
+      SUPERFOLIO_CREDENTIAL_MASTER_KEY: ${{ secrets.SUPERFOLIO_CREDENTIAL_MASTER_KEY }}
 
     steps:
       - name: Checkout repository

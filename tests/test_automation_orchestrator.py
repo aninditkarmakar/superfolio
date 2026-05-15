@@ -71,13 +71,12 @@ class TestIbkrFlexWebServiceAdapterPreflightValidation(unittest.TestCase):
             with self.assertRaises(RuntimeError) as ctx:
                 adapter.preflight_validate_config(config)
         msg = str(ctx.exception)
-        self.assertIn("IBKR_FLEX_TOKEN", msg)
-        self.assertIn("IBKR_FLEX_QUERY_ID", msg)
+        self.assertIn("SUPERFOLIO_CREDENTIAL_MASTER_KEY", msg)
 
     def test_preflight_does_not_include_database_url_in_missing(self):
         adapter = self._get_adapter()
         config = load_integration_config("ibkr_flex_ws")
-        env = {"IBKR_FLEX_TOKEN": "tok", "IBKR_FLEX_QUERY_ID": "qid"}
+        env = {"SUPERFOLIO_CREDENTIAL_MASTER_KEY": "masterkey"}
         with mock.patch.dict(os.environ, env, clear=True):
             # Should pass; DATABASE_URL absence is not a preflight concern
             adapter.preflight_validate_config(config)
@@ -86,8 +85,7 @@ class TestIbkrFlexWebServiceAdapterPreflightValidation(unittest.TestCase):
         adapter = self._get_adapter()
         config = load_integration_config("ibkr_flex_ws")
         env = {
-            "IBKR_FLEX_TOKEN": "sometoken",
-            "IBKR_FLEX_QUERY_ID": "12345",
+            "SUPERFOLIO_CREDENTIAL_MASTER_KEY": "masterkey",
             "DATABASE_URL": "postgresql://localhost/db",
         }
         with mock.patch.dict(os.environ, env, clear=True):
@@ -96,30 +94,30 @@ class TestIbkrFlexWebServiceAdapterPreflightValidation(unittest.TestCase):
     def test_preflight_treats_blank_env_var_as_missing(self):
         adapter = self._get_adapter()
         config = load_integration_config("ibkr_flex_ws")
-        env = {"IBKR_FLEX_TOKEN": "   ", "IBKR_FLEX_QUERY_ID": "qid"}
+        env = {"SUPERFOLIO_CREDENTIAL_MASTER_KEY": "   "}
         with mock.patch.dict(os.environ, env, clear=True):
             with self.assertRaises(RuntimeError) as ctx:
                 adapter.preflight_validate_config(config)
-        self.assertIn("IBKR_FLEX_TOKEN", str(ctx.exception))
+        self.assertIn("SUPERFOLIO_CREDENTIAL_MASTER_KEY", str(ctx.exception))
 
     def test_preflight_treats_empty_string_as_missing(self):
         adapter = self._get_adapter()
         config = load_integration_config("ibkr_flex_ws")
-        env = {"IBKR_FLEX_TOKEN": "", "IBKR_FLEX_QUERY_ID": "qid"}
+        env = {"SUPERFOLIO_CREDENTIAL_MASTER_KEY": ""}
         with mock.patch.dict(os.environ, env, clear=True):
             with self.assertRaises(RuntimeError) as ctx:
                 adapter.preflight_validate_config(config)
-        self.assertIn("IBKR_FLEX_TOKEN", str(ctx.exception))
+        self.assertIn("SUPERFOLIO_CREDENTIAL_MASTER_KEY", str(ctx.exception))
 
-    def test_preflight_missing_only_one_var_raises(self):
+    def test_preflight_missing_only_master_key_raises_not_database_url(self):
         adapter = self._get_adapter()
         config = load_integration_config("ibkr_flex_ws")
-        env = {"IBKR_FLEX_TOKEN": "tok"}
+        env = {"DATABASE_URL": "postgresql://localhost/db"}
         with mock.patch.dict(os.environ, env, clear=True):
             with self.assertRaises(RuntimeError) as ctx:
                 adapter.preflight_validate_config(config)
-        self.assertIn("IBKR_FLEX_QUERY_ID", str(ctx.exception))
-        self.assertNotIn("IBKR_FLEX_TOKEN", str(ctx.exception))
+        self.assertIn("SUPERFOLIO_CREDENTIAL_MASTER_KEY", str(ctx.exception))
+        self.assertNotIn("DATABASE_URL", str(ctx.exception))
 
 
 class TestIbkrFlexWebServiceAdapterFetchPayload(unittest.TestCase):
@@ -863,7 +861,7 @@ class AutomationOrchestratorDryRunTests(unittest.TestCase):
 
         class FailPreflight(FakeAdapter):
             def preflight_validate_config(self, config) -> None:
-                raise RuntimeError("missing required environment variables: IBKR_FLEX_TOKEN")
+                raise RuntimeError("missing required environment variables: SUPERFOLIO_CREDENTIAL_MASTER_KEY")
 
         self._run(request, db, adapter=FailPreflight())
 
@@ -880,7 +878,7 @@ class AutomationOrchestratorDryRunTests(unittest.TestCase):
 
         class FailPreflight(FakeAdapter):
             def preflight_validate_config(self, config) -> None:
-                raise RuntimeError("missing required environment variables: IBKR_FLEX_TOKEN")
+                raise RuntimeError("missing required environment variables: SUPERFOLIO_CREDENTIAL_MASTER_KEY")
 
         self._run(request, db, adapter=FailPreflight())
 
@@ -2708,7 +2706,7 @@ class PreflightFailureChildFinalizationTests(unittest.TestCase):
 
     class _FailPreflight(FakeAdapter):
         def preflight_validate_config(self, config) -> None:
-            raise RuntimeError("missing required environment variables: IBKR_FLEX_TOKEN")
+            raise RuntimeError("missing required environment variables: SUPERFOLIO_CREDENTIAL_MASTER_KEY")
 
     def test_preflight_failure_finalizes_single_child_as_failed(self):
         """Preflight failure with one child: child must be finalized as failed (not left pending)."""
