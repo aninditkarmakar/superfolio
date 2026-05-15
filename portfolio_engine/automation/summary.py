@@ -34,6 +34,9 @@ def _sanitize_feed_result(entry: dict[str, Any]) -> dict[str, Any]:
             continue
         if field == "message":
             result[field] = sanitize_error_message(entry[field])
+        elif field == "record_counts":
+            record_counts = entry[field]
+            result[field] = {rt: dict(counts) for rt, counts in record_counts.items()}
         else:
             result[field] = entry[field]
     return result

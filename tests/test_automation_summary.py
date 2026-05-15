@@ -187,6 +187,27 @@ class BuildChildSummaryTests(unittest.TestCase):
         summary = build_child_summary()
         self.assertNotIn("feed_results", summary)
 
+    def test_mutating_feed_result_record_counts_after_build_does_not_corrupt_summary(self) -> None:
+        """Mutating feed result record_counts after build_child_summary must not mutate summary."""
+        original_counts = empty_record_counts()
+        feed_entry = {
+            "feed_key": "daily",
+            "display_name": "Daily",
+            "status": "succeeded",
+            "record_counts": original_counts,
+        }
+        summary = build_child_summary(feed_results=[feed_entry])
+        captured = summary["feed_results"][0]["record_counts"]["cash_flows"]["supported"]
+
+        # Mutate the original after building
+        original_counts["cash_flows"]["supported"] = 999
+
+        self.assertEqual(
+            summary["feed_results"][0]["record_counts"]["cash_flows"]["supported"],
+            captured,
+            "Mutating original feed result record_counts must not affect the built summary",
+        )
+
 
 class BuildParentSummaryTests(unittest.TestCase):
     def test_account_counts_total(self) -> None:
