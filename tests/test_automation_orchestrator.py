@@ -2972,6 +2972,70 @@ class AdapterContextTests(unittest.TestCase):
         self.assertNotIn("supersecrettoken", error_msg)
         self.assertNotIn("myprivatequery", error_msg)
 
+    def test_connection_context_credentials_are_immutable(self) -> None:
+        from portfolio_engine.automation.types import IntegrationConnectionContext
+        from portfolio_engine.automation.credentials import SecretValue
+
+        context = IntegrationConnectionContext(
+            connection_id="c1",
+            integration_key="ibkr_flex_ws",
+            brokerage_code="IBKR",
+            name="Test",
+            credentials={"flex_token": SecretValue("tok")},
+        )
+
+        with self.assertRaises(TypeError):
+            context.credentials["flex_token"] = SecretValue("newvalue")  # type: ignore[index]
+
+    def test_feed_context_secrets_are_immutable(self) -> None:
+        from portfolio_engine.automation.types import IntegrationFeedContext
+        from portfolio_engine.automation.credentials import SecretValue
+
+        feed = IntegrationFeedContext(
+            feed_id="f1",
+            feed_key="daily",
+            display_name="Daily",
+            secrets={"query_id": SecretValue("qid")},
+        )
+
+        with self.assertRaises(TypeError):
+            feed.secrets["query_id"] = SecretValue("newvalue")  # type: ignore[index]
+
+    def test_connection_context_is_not_hashable(self) -> None:
+        from portfolio_engine.automation.types import IntegrationConnectionContext
+
+        context = IntegrationConnectionContext(
+            connection_id="c1",
+            integration_key="ibkr_flex_ws",
+            brokerage_code="IBKR",
+            name="Test",
+            credentials={},
+        )
+
+        with self.assertRaises(TypeError):
+            hash(context)
+
+    def test_feed_context_is_not_hashable(self) -> None:
+        from portfolio_engine.automation.types import IntegrationFeedContext
+
+        feed = IntegrationFeedContext(
+            feed_id="f1",
+            feed_key="daily",
+            display_name="Daily",
+            secrets={},
+        )
+
+        with self.assertRaises(TypeError):
+            hash(feed)
+
+    def test_broker_adapter_protocol_fetch_feed_payload_body_is_ellipsis(self) -> None:
+        """Protocol method body must be ... (not a docstring-only stub that returns None)."""
+        import inspect
+        from portfolio_engine.automation.types import BrokerAdapter
+
+        src = inspect.getsource(BrokerAdapter.fetch_feed_payload)
+        self.assertIn("...", src, "fetch_feed_payload protocol body must use ellipsis")
+
 
 if __name__ == "__main__":
     unittest.main()

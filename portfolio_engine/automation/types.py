@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+import types as _types
 from dataclasses import dataclass
 from datetime import date
-from typing import Protocol
+from typing import Mapping, Protocol
 
 from portfolio_engine.database import AutomationAccountTarget
 from portfolio_engine.automation.credentials import SecretValue
@@ -47,7 +48,14 @@ class IntegrationConnectionContext:
     integration_key: str
     brokerage_code: str
     name: str
-    credentials: dict[str, SecretValue]
+    credentials: Mapping[str, SecretValue]
+
+    __hash__ = None  # type: ignore[assignment]
+
+    def __post_init__(self) -> None:
+        object.__setattr__(
+            self, "credentials", _types.MappingProxyType(dict(self.credentials))
+        )
 
 
 @dataclass(frozen=True)
@@ -55,7 +63,14 @@ class IntegrationFeedContext:
     feed_id: str
     feed_key: str
     display_name: str | None
-    secrets: dict[str, SecretValue]
+    secrets: Mapping[str, SecretValue]
+
+    __hash__ = None  # type: ignore[assignment]
+
+    def __post_init__(self) -> None:
+        object.__setattr__(
+            self, "secrets", _types.MappingProxyType(dict(self.secrets))
+        )
 
 
 class BrokerAdapter(Protocol):
@@ -78,8 +93,7 @@ class BrokerAdapter(Protocol):
         connection: IntegrationConnectionContext,
         feed: IntegrationFeedContext,
         request: AutomationRunRequest,
-    ) -> BrokerPayload:
-        """Fetch one broker payload for one connection feed."""
+    ) -> BrokerPayload: ...
 
 
 @dataclass(frozen=True)
