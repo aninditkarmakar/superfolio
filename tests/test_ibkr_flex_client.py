@@ -37,5 +37,71 @@ class BrokerFetchErrorTests(unittest.TestCase):
         self.assertEqual(safe_fetch_error_category(RuntimeError("boom")), "feed_fetch_failed")
 
 
+from dataclasses import dataclass
+
+from portfolio_engine.automation.ibkr_flex_client import (
+    IBKR_FLEX_BASE_URL,
+    IBKR_FLEX_USER_AGENT,
+    IbkrFlexWebServiceClient,
+)
+
+
+VALID_FLEX_XML = """<FlexQueryResponse>
+  <FlexStatements>
+    <FlexStatement>
+      <CashTransactions>
+        <CashTransaction accountId="U100" reportDate="20250102" dateTime="20250102;091500" currency="USD" amount="1000.00" fxRateToBase="1" type="Deposits/Withdrawals" transactionID="CF1" />
+      </CashTransactions>
+    </FlexStatement>
+  </FlexStatements>
+</FlexQueryResponse>"""
+
+
+@dataclass(frozen=True)
+class FakeHttpResponse:
+    status_code: int
+    text: str
+
+
+class FakeTransport:
+    def __init__(self, responses: list[FakeHttpResponse | BaseException]) -> None:
+        self.responses = list(responses)
+        self.calls: list[dict[str, object]] = []
+
+    def get(self, url: str, *, params: dict[str, str], headers: dict[str, str], timeout: float) -> FakeHttpResponse:
+        self.calls.append({"url": url, "params": dict(params), "headers": dict(headers), "timeout": timeout})
+        response = self.responses.pop(0)
+        if isinstance(response, BaseException):
+            raise response
+        return response
+
+
+class IbkrFlexClientRequestTests(unittest.TestCase):
+    def test_fetch_report_uses_documented_send_and_get_request_shapes(self) -> None:
+        transport = FakeTransport(
+            [
+                FakeHttpResponse(
+                    200,
+                    """<FlexStatementResponse><Status>Success</Status><ReferenceCode>1234567890</ReferenceCode><url>ignored</url></FlexStatementResponse>""",
+                ),
+                FakeHttpResponse(200, VALID_FLEX_XML),
+            ]
+        )
+        sleeps: list[float] = []
+        client = IbkrFlexWebServiceClient(transport=transport, sleep=sleeps.append)
+
+        xml = client.fetch_report(token="token-123", query_id="query-456")
+
+        self.assertEqual(xml, VALID_FLEX_XML)
+        self.assertEqual(len(transport.calls), 2)
+        self.assertEqual(transport.calls[0]["url"], f"{IBKR_FLEX_BASE_URL}/SendRequest")
+        self.assertEqual(transport.calls[0]["params"], {"t": "token-123", "q": "query-456", "v": "3"})
+        self.assertEqual(transport.calls[0]["headers"], {"User-Agent": IBKR_FLEX_USER_AGENT})
+        self.assertEqual(transport.calls[1]["url"], f"{IBKR_FLEX_BASE_URL}/GetStatement")
+        self.assertEqual(transport.calls[1]["params"], {"t": "token-123", "q": "1234567890", "v": "3"})
+        self.assertEqual(transport.calls[1]["headers"], {"User-Agent": IBKR_FLEX_USER_AGENT})
+        self.assertEqual(sleeps, [20.0])
+
+
 if __name__ == "__main__":
     unittest.main()
