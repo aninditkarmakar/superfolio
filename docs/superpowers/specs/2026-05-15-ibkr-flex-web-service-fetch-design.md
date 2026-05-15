@@ -83,9 +83,9 @@ Assumptions from those docs:
   `SendRequest`; temporary states include statement unavailable, incomplete, in
   progress, or server-load responses.
 
-The implementation plan must include a protocol-validation task before coding.
-That task records the checked public URLs, the verified request/response
-assumptions, and any drift from this design.
+The implementation plan must include a "Protocol Validation" task before coding.
+That task records the checked public URLs, the verification date, the verified
+request/response assumptions, and any drift from this design.
 
 ## Architecture boundary
 
@@ -141,6 +141,11 @@ returning payloads:
   fields, and unexpected XML roots are `ibkr_fetch_failed`.
 - only recognized report XML proceeds to the existing parser and ingestion path.
 
+Before coding the fetch layer, implementation planning must inspect the existing
+Flex parser and synthetic fixtures, record the accepted real report root
+element(s), and add tests for accepted report XML, `FlexStatementResponse` error
+XML, unknown XML roots, HTML/error content, and malformed XML.
+
 ## Fetch-once reuse
 
 The fetcher must request each connection/feed report once per automation run and
@@ -157,6 +162,11 @@ load mode currently checks overlap per account and fetches inside the per-accoun
 loop. The implementation must refactor the multi-feed execution path so payload
 retrieval is per connection/feed/run in both dry-run and load mode, while parsing
 and loading remain per account.
+
+Important implementation warning: the current `_execute_load_multi_feed()` shape
+is incompatible with real IBKR fetch logic because it fetches inside the
+per-account loop. Refactor this load path and prove fetch-once behavior with
+tests before enabling the real IBKR HTTP fetcher.
 
 For load mode specifically:
 
@@ -185,25 +195,38 @@ Policy:
 - `GetStatement` may be retried only for documented temporary states.
 - After a successful `SendRequest`, wait 20 seconds before the first
   `GetStatement` attempt.
-- Poll up to five `GetStatement` attempts, 20 seconds apart, for documented
-  temporary states.
+- Make five total `GetStatement` calls: one initial retrieval attempt after the
+  initial 20-second wait, plus up to four retries 20 seconds apart when the prior
+  response is a documented temporary state.
 - Non-temporary service errors fail immediately.
 - `SendRequest` network failures are not retried in the first version. If the
   response carrying the reference code is lost, the run fails safely with
   `ibkr_fetch_failed` and a later manual run can retry.
 - `GetStatement` network failures after a reference code exists may be retried
   within the same bounded polling budget.
+- Reference codes are not logged, stored in job summaries, included in debug
+  filenames, or otherwise persisted by the first version. If polling exhausts, a
+  later manual retry issues a fresh `SendRequest`.
 
 ## Error categories
 
 The adapter should raise typed or structured IBKR fetch errors internally, then
 surface only sanitized messages through existing automation error handling.
 The orchestrator must preserve broker fetch categories instead of collapsing all
-adapter exceptions into `feed_fetch_failed`. Add a small structured exception
-contract, for example `BrokerFetchError(category: str, message: str | None)`,
-whose `category` is copied into `feed_results[].error_category` after validation
-against an allowlist. Account-level summaries may still use `feed_fetch_failed`
-when all feeds fail, but feed-level details must retain the IBKR category.
+adapter exceptions into `feed_fetch_failed`.
+
+Use a concrete structured exception contract:
+
+```python
+class BrokerFetchError(Exception):
+    def __init__(self, category: str, message: str | None = None): ...
+```
+
+`category` is copied into `feed_results[].error_category` only after validation
+against an allowlist used by both dry-run and load paths. Unknown or disallowed
+categories fall back to `feed_fetch_failed`. Account-level summaries may still
+use `feed_fetch_failed` when all feeds fail, but feed-level details must retain
+allowed IBKR categories.
 
 Initial categories:
 
@@ -245,6 +268,9 @@ Initial IBKR service error mapping:
 | `1020` | Invalid request or unable to validate | `ibkr_invalid_query` | no |
 | `1021` | Statement could not be retrieved now | `ibkr_report_not_ready` | yes |
 
+Unknown, missing, or non-numeric `ErrorCode` values are `ibkr_fetch_failed`, no
+retry, with only a sanitized message retained.
+
 If a retriable code is returned by `SendRequest`, the first version still fails
 safely rather than reissuing `SendRequest`, because retrying `SendRequest` can
 generate duplicate reports and increase pacing risk. Retriable behavior applies
@@ -256,15 +282,18 @@ Default behavior keeps fetched XML in memory only.
 
 For manual local testing, the CLI will accept an explicit debug output directory.
 When provided, the fetch layer writes retrieved XML under that directory using
-non-secret UUID-based filenames. Filenames may include non-sensitive context such
-as connection id and feed key, but must not include tokens, query ids, reference
-codes, raw account numbers, or report contents.
+non-secret UUID-based filenames. Filename format is
+`<connection_id>-<feed_key>-<uuid4>.xml`, with connection and feed values
+sanitized to safe filename characters. Filenames must not include tokens, query
+ids, reference codes, raw account numbers, or report contents.
 
 This option is local CLI-only:
 
 - GitHub Actions workflow inputs must not expose raw XML debug saving.
-- Runtime must reject debug-save paths when `GITHUB_ACTIONS=true`, even if a
-  caller somehow passes the local-only flag.
+- Enforcement is layered: the CLI rejects debug-save options when
+  `GITHUB_ACTIONS=true`, and the fetch/debug-save helper also rejects non-null
+  debug-save paths when `GITHUB_ACTIONS=true` so programmatic calls cannot bypass
+  the guard accidentally.
 - Debug XML must not be uploaded as artifacts.
 - XML contents must not be printed.
 - Documentation must treat the output directory as private local data, similar
@@ -282,10 +311,12 @@ version:
   `User-Agent: SuperFolio/1.0 (+https://github.com/aninditkarmakar/superfolio)`
 - HTTP client dependency: `httpx`
 
-The implementation should wrap `httpx` behind an injected transport boundary so
-tests can provide a fake transport and make no real network calls. Runtime
-configuration should not expose a production base-URL override in the first
-version; this avoids accidentally pointing real automation at untrusted
+The implementation should wrap `httpx` behind a small injected transport
+protocol with a `get(url, params, headers, timeout)`-style method. Production uses
+an `httpx.Client`-backed implementation; tests inject a fake transport that
+records request shape and returns synthetic responses without real network calls.
+Runtime configuration should not expose a production base-URL override in the
+first version; this avoids accidentally pointing real automation at untrusted
 endpoints.
 
 ## Testing strategy
@@ -302,22 +333,33 @@ Required coverage:
 - Successful `SendRequest` followed by successful `GetStatement`.
 - `GetStatement` temporary failure followed by success.
 - Polling exhaustion returns `ibkr_report_not_ready`.
+- Polling uses five total `GetStatement` calls after the initial wait, not one
+  initial call plus five retries.
 - Known IBKR error-code mappings for auth, invalid query, pacing, and temporary
   states.
+- Unknown or non-numeric IBKR error codes are `ibkr_fetch_failed` and not retried.
 - `SendRequest` network failures are not retried.
 - `GetStatement` service-response XML is classified before returning payloads to
   the parser.
+- Accepted real report XML roots are confirmed from existing parser fixtures
+  before implementing response classification.
 - Malformed XML and missing required fields return `ibkr_fetch_failed`.
 - Network failures return sanitized `ibkr_fetch_failed`.
 - Structured `BrokerFetchError` categories appear in `feed_results`.
+- Unknown `BrokerFetchError` categories fall back to `feed_fetch_failed`.
 - Tokens and query ids do not appear in exceptions or summaries.
+- Reference codes do not appear in logs, summaries, debug filenames, or persisted
+  fields.
 - Multi-account connection/feed execution fetches once and reuses XML per account
   in both dry-run and load mode.
 - Load mode does not fetch feeds when all accounts in a connection group are
   blocked by overlap.
 - Local debug XML save writes synthetic XML only when explicitly enabled.
+- Debug XML filenames use `<connection_id>-<feed_key>-<uuid4>.xml` with safe
+  filename sanitization.
 - GitHub Actions/manual workflow does not expose raw XML debug-save inputs, and
-  `GITHUB_ACTIONS=true` rejects debug saves at runtime.
+  `GITHUB_ACTIONS=true` rejects debug saves in both CLI and fetch/debug-save
+  helper paths.
 - Fetched reports use safe `source_name` values in the form
   `ibkr_flex_ws:<connection_id>:<feed_key>`.
 
@@ -344,7 +386,7 @@ Documentation should explain:
   directly in `adapters.py`.
 - Use a structured XML parser for IBKR service responses and Flex payloads.
 - Add `httpx` to `requirements.txt` during implementation and use an injected
-  transport boundary for tests.
+  transport protocol for tests.
 - Keep the adapter free of database access.
 - Keep future broker extensibility by avoiding IBKR-specific behavior in generic
   orchestration code except where fetch-once reuse is necessary for feed payload
