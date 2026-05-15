@@ -394,6 +394,25 @@ class MigrationContractTests(unittest.TestCase):
             sql,
         )
 
+    # ------------------------------------------------------------------
+    # Task 14: Overlap check is account-scoped, not connection-scoped
+    # ------------------------------------------------------------------
+
+    def test_overlap_check_remains_account_scoped(self) -> None:
+        """has_overlapping_automation_load must filter by account_id and must NOT
+        accept a p_connection_id parameter, ensuring overlap blocking cannot be
+        bypassed by reassigning an account to a different connection."""
+        text = Path("migrations/deploy/create_automation_layer.sql").read_text(encoding="utf-8")
+
+        # Isolate just the has_overlapping_automation_load function body/signature
+        # to avoid false positives from other functions that legitimately use p_connection_id.
+        func_start = text.index("CREATE FUNCTION public.has_overlapping_automation_load")
+        func_end = text.index("$$;", func_start) + 3
+        func_body = text[func_start:func_end]
+
+        self.assertIn("p_account_id UUID", func_body)
+        self.assertNotIn("p_connection_id UUID", func_body)
+
 
 class AutomationConnectionMigrationTests(unittest.TestCase):
     def test_automation_layer_creates_connection_tables(self) -> None:

@@ -200,6 +200,7 @@ class FakeAutomationDatabase:
         self.nav_bulk_calls: list = []
         # Overlap detection (Task 15)
         self.overlapping_load: bool = False
+        self.overlapping_account_ids: set[str] = set()
         self.overlap_check_calls: list = []
         # Portfolio id resolution (Issue 1 fix)
         self.portfolio_id_by_name: dict[str, str] = {}
@@ -352,7 +353,7 @@ class FakeAutomationDatabase:
             "requested_end_date": requested_end_date,
             "exclude_automation_job_id": exclude_automation_job_id,
         })
-        return self.overlapping_load
+        return self.overlapping_load or account_id in self.overlapping_account_ids
 
     def list_active_connection_credentials(self, connection_id: str) -> dict[str, bytes]:
         self.credential_calls.append(connection_id)
@@ -4321,6 +4322,67 @@ class LoadMultiFeedTests(unittest.TestCase):
         child = self._find_child(db, "child-1")
         self.assertIsNotNone(child)
         self.assertIn("record_counts", child.summary)
+
+
+# ---------------------------------------------------------------------------
+# Task 14: Overlap blocking is account/date scoped, not connection-scoped
+# ---------------------------------------------------------------------------
+
+
+class AutomationOverlapConnectionScopingTests(unittest.TestCase):
+    """Task 14: Reassigning an account to a different connection must not bypass overlap blocking.
+
+    The overlap check uses account_id and date range as the scope; connection_id
+    is not a match condition. These tests confirm that behaviour.
+    """
+
+    def _run(self, request, db, adapter):
+        from portfolio_engine.automation.orchestrator import run_automation
+        with mock.patch.dict(os.environ, {"SUPERFOLIO_CREDENTIAL_MASTER_KEY": _TEST_MASTER_KEY}):
+            return run_automation(request, database=db, adapter=adapter)
+
+    def _find_child(self, db, child_id: str):
+        for f in db.finalized_children:
+            if f.automation_job_account_id == child_id:
+                return f
+        return None
+
+    def test_reassigned_connection_does_not_bypass_overlap(self) -> None:
+        """Overlap blocking must fire for an account even when the account's connection_id
+        has been reassigned. The check is account-scoped: connection_id is irrelevant."""
+        # _configured_db_with_connection_feeds uses account_id="account-uuid" /
+        # external_id="U100" assigned to connection_id="test-connection-id".
+        db = _configured_db_with_connection_feeds(["daily"])
+        # Mark account-uuid as having an overlapping load (by account ID, not connection ID).
+        db.overlapping_account_ids.add("account-uuid")
+
+        result = self._run(
+            _make_accounts_load_request("U100"),
+            db=db,
+            adapter=FakeConnectionAdapter(),
+        )
+
+        self.assertEqual(result.status, "failed")
+        child = self._find_child(db, "child-1")
+        self.assertIsNotNone(child)
+        self.assertEqual(child.summary["error_category"], "overlapping_load_job")
+
+    def test_overlap_check_call_does_not_include_connection_id(self) -> None:
+        """The overlap check call recorded in the fake DB must not carry a connection_id key."""
+        db = _configured_db_with_connection_feeds(["daily"])
+        # No overlap — we just want to inspect the call arguments.
+        db.overlapping_load = False
+
+        self._run(
+            _make_accounts_load_request("U100"),
+            db=db,
+            adapter=FakeConnectionAdapter(),
+        )
+
+        self.assertGreaterEqual(len(db.overlap_check_calls), 1)
+        for call in db.overlap_check_calls:
+            self.assertNotIn("connection_id", call,
+                             "overlap check must not receive connection_id as a parameter")
 
 
 if __name__ == "__main__":

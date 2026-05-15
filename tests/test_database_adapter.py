@@ -1151,6 +1151,31 @@ class AutomationDatabaseAdapterTests(unittest.TestCase):
             ("ibkr_flex_ws", "account-uuid", date(2024, 1, 1), date(2024, 1, 31), "exclude-job-uuid"),
         )
 
+    # ------------------------------------------------------------------
+    # Task 14: Overlap check must not pass connection_id to DB function
+    # ------------------------------------------------------------------
+
+    def test_has_overlapping_automation_load_does_not_pass_connection_id(self) -> None:
+        """Adapter must call DB function with exactly 5 parameters (account-scoped, no connection_id)."""
+        connection = FakeConnection((False,))
+        database = SuperFolioDatabase(connection)
+
+        database.has_overlapping_automation_load(
+            integration_key="ibkr_flex_ws",
+            account_id="account-uuid",
+            requested_start_date=date(2024, 1, 1),
+            requested_end_date=date(2024, 1, 31),
+            exclude_automation_job_id="job-uuid",
+        )
+
+        sql, params = connection.cursor_instance.executed[0]
+        # SQL must reference exactly 5 placeholders — connection_id is not one of them.
+        self.assertEqual(sql.count("%s"), 5,
+                         "overlap DB call must have exactly 5 params; connection_id must not be added")
+        # Verify account_id is present and no connection-related value is injected.
+        self.assertIn("account-uuid", params)
+        self.assertEqual(len(params), 5)
+
 
 class IntegrationConnectionAdapterTests(unittest.TestCase):
     def test_create_integration_connection_calls_function(self) -> None:
