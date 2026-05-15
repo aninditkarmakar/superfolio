@@ -3997,6 +3997,42 @@ class DryRunMultiFeedTests(unittest.TestCase):
 
         self.assertEqual(len(db.started_ingestion_runs), 0)
 
+    def test_dry_run_no_active_feeds_fails_child_and_parent(self) -> None:
+        """A connection group with zero active feeds must fail, not silently succeed."""
+        db = _configured_db_with_connection_feeds([])  # no feeds configured
+        adapter = FakeMultiFeedAdapter(payload_by_feed={})
+
+        result = self._run(_make_accounts_dry_run_request("U100"), db=db, adapter=adapter)
+
+        self.assertEqual(result.status, "failed")
+        child = self._find_child(db, "child-1")
+        self.assertIsNotNone(child)
+        self.assertEqual(child.status, "failed")
+        self.assertEqual(child.summary.get("error_category"), "no_active_feeds")
+
+    def test_dry_run_no_active_feeds_error_category_no_secrets(self) -> None:
+        """no_active_feeds error category must not expose secrets in summary or error message."""
+        db = _configured_db_with_connection_feeds([])
+        adapter = FakeMultiFeedAdapter(payload_by_feed={})
+
+        self._run(_make_accounts_dry_run_request("U100"), db=db, adapter=adapter)
+
+        child = self._find_child(db, "child-1")
+        self.assertIsNotNone(child)
+        summary_str = str(child.summary)
+        self.assertNotIn("query_id", summary_str)
+        self.assertNotIn("flex_token", summary_str)
+        self.assertNotIn("test-token", summary_str)
+
+    def test_dry_run_no_active_feeds_does_not_call_fetch(self) -> None:
+        """When there are no active feeds, fetch_feed_payload must not be called."""
+        db = _configured_db_with_connection_feeds([])
+        adapter = FakeMultiFeedAdapter(payload_by_feed={})
+
+        self._run(_make_accounts_dry_run_request("U100"), db=db, adapter=adapter)
+
+        self.assertEqual(adapter.fetched_feed_keys, [])
+
 
 if __name__ == "__main__":
     unittest.main()

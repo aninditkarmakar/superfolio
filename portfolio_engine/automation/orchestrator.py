@@ -550,6 +550,25 @@ def _execute_dry_run_multi_feed(
     each account child row.
     """
     for connection_ctx, feed_ctxs, group_pairs in fetch_groups:
+        # Guard: fail the entire connection group if there are no active feeds.
+        # An empty feed list cannot produce any results; silently succeeding via
+        # `all([])` would violate the no-active-feeds contract.
+        if not feed_ctxs:
+            failed_summary = build_child_summary(error_category="no_active_feeds")
+            for child_id, _ in group_pairs:
+                database.finalize_automation_job_account(
+                    AutomationJobAccountFinalize(
+                        automation_job_account_id=child_id,
+                        status="failed",
+                        ingestion_run_id=None,
+                        summary=failed_summary,
+                        error_message="no_active_feeds",
+                    )
+                )
+                child_statuses.append("failed")
+                child_summaries.append(failed_summary)
+            continue
+
         # Mark all accounts in this group as running before processing feeds.
         for child_id, _ in group_pairs:
             database.mark_automation_job_account_running(child_id)
