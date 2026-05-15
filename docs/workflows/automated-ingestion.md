@@ -7,10 +7,11 @@ Automated ingestion runs through the manual GitHub Actions workflow `.github/wor
 | Secret | Purpose |
 | --- | --- |
 | `DATABASE_URL` | PostgreSQL connection string for automation job tracking and ingestion writes. |
-| `IBKR_FLEX_TOKEN` | IBKR Flex Web Service authentication token. |
-| `IBKR_FLEX_QUERY_ID` | IBKR Flex query id used to request the Flex report. |
+| `SUPERFOLIO_CREDENTIAL_MASTER_KEY` | Fernet master key used to decrypt integration credentials stored in the database at runtime. Must be a valid URL-safe base-64 encoded 32-byte key. Generate with `python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"`. |
 
-These must be configured as repository secrets before triggering the workflow.
+Per-login broker tokens and query ids are **not** configured as GitHub repository secrets. They are stored encrypted in `integration_connection_credentials` rows in the database and decrypted at runtime using `SUPERFOLIO_CREDENTIAL_MASTER_KEY`. See [Multi-login setup](#multi-login-setup-connection-feed-and-assignment-configuration) below.
+
+These secrets must be configured before triggering the workflow.
 
 ## Inputs
 
@@ -54,6 +55,136 @@ Load mode checks for overlap during processing of each account: if an active pen
 ### Privacy posture
 
 Database summaries and workflow step output are privacy-safe. They contain only counts, statuses, and sanitized error categories. Raw amounts, NAV values, account balances, and raw Flex payloads are never written to workflow logs or automation job rows.
+
+## Multi-login setup: connection, feed, and assignment configuration
+
+Before running automated ingestion against a broker login, create the connection record, store its credentials, define its feeds, and assign accounts to it. Use `scripts/manage_integration_connections.py` for all setup steps.
+
+### 1. Generate the master key (once per environment)
+
+```bash
+python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+```
+
+Store the output as the `SUPERFOLIO_CREDENTIAL_MASTER_KEY` repository secret and as the same environment variable locally.
+
+### 2. Create an integration connection
+
+```bash
+python scripts/manage_integration_connections.py create \
+  --integration ibkr_flex_ws \
+  --brokerage-code IBKR \
+  --name "Primary login"
+```
+
+The command prints the new connection id. Record it for the following steps.
+
+### 3. Store credentials for the connection
+
+Credentials are encrypted with the master key before being written to the database. Pass the plaintext value through an environment variable; the `--value-from-env` flag names the variable to read:
+
+```bash
+MY_FLEX_TOKEN="<token>" \
+  python scripts/manage_integration_connections.py set-credential \
+    --connection-id <connection-id> \
+    --credential-name flex_token \
+    --value-from-env MY_FLEX_TOKEN
+
+MY_FLEX_QUERY_ID="<query-id>" \
+  python scripts/manage_integration_connections.py set-credential \
+    --connection-id <connection-id> \
+    --credential-name flex_query_id \
+    --value-from-env MY_FLEX_QUERY_ID
+```
+
+Setting the same `credential_name` again rotates the previous value: the old row is deactivated and a new active row is inserted.
+
+### 4. Register feeds for the connection
+
+Each feed represents one distinct Flex query configuration associated with the connection:
+
+```bash
+python scripts/manage_integration_connections.py add-feed \
+  --connection-id <connection-id> \
+  --feed-key primary \
+  --display-name "Primary Flex feed"
+```
+
+### 5. Assign accounts to the connection
+
+Each registered account must be assigned to the connection that will fetch its data.
+
+Assign one account:
+
+```bash
+python scripts/manage_integration_connections.py assign-account \
+  --connection-id <connection-id> \
+  --brokerage-code IBKR \
+  --account-external-id U100
+```
+
+Assign multiple accounts in one call:
+
+```bash
+python scripts/manage_integration_connections.py assign-accounts \
+  --connection-id <connection-id> \
+  --brokerage-code IBKR \
+  --account-external-id U100 \
+  --account-external-id U200
+```
+
+Assign all accounts in a named portfolio to a connection:
+
+```bash
+python scripts/manage_integration_connections.py assign-portfolio \
+  --connection-id <connection-id> \
+  --portfolio-name "All Accounts" \
+  --brokerage-code IBKR
+```
+
+Only one active assignment per account is supported; re-assigning an account to a different connection updates the existing assignment.
+
+### 6. Validate assignments before running
+
+```bash
+python scripts/manage_integration_connections.py validate-assignments \
+  --target-type portfolio \
+  --portfolio-name "All Accounts" \
+  --brokerage-code IBKR
+```
+
+Exits `0` with `assignments validated: all accounts assigned` when every active account in the target has an active assignment. Exits `1` and prints unassigned account ids if any are missing.
+
+For an account-list target:
+
+```bash
+python scripts/manage_integration_connections.py validate-assignments \
+  --target-type account_list \
+  --brokerage-code IBKR \
+  --account-external-id U100 \
+  --account-external-id U200
+```
+
+### 7. List connections and feeds
+
+```bash
+python scripts/manage_integration_connections.py list-connections
+
+python scripts/manage_integration_connections.py list-feeds \
+  --connection-id <connection-id>
+```
+
+### Cutover checklist
+
+When migrating from a single-login setup to a multi-login setup, complete these steps before the first automated run:
+
+1. **Remove old per-login secrets** — delete `IBKR_FLEX_TOKEN` and `IBKR_FLEX_QUERY_ID` repository secrets if they were previously configured. They are no longer read by the workflow.
+2. **Add `SUPERFOLIO_CREDENTIAL_MASTER_KEY`** — generate and store the Fernet master key as a repository secret (step 1 above).
+3. **Deploy the latest migrations** — ensure `create_automation_layer` is deployed. It includes `integration_connections`, `integration_connection_credentials`, `integration_feeds`, and `account_integration_assignments`.
+4. **Create connections and store credentials** — run steps 2–4 above for each distinct broker login.
+5. **Assign all automation-target accounts** — run step 5 above so every account that will be resolved by the workflow has an active assignment.
+6. **Validate assignments** — run step 6 above for each configured target before triggering the workflow.
+7. **Trigger a dry-run** — confirm target resolution, assignment lookup, and credential loading succeed. No payloads are fetched (adapter fetch is not yet implemented), but job lifecycle and per-account outcomes are recorded.
 
 ## CLI entry point
 

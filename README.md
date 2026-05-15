@@ -49,6 +49,7 @@ scripts/
   register_account.py                    # Register a brokerage account before ingestion
   ingest_flex_file.py                    # Dry-run or load supported Flex XML records
   run_automated_ingestion.py             # Automated ingestion CLI: manual workflow trigger entry point
+  manage_integration_connections.py      # Multi-login setup CLI: connections, credentials, feeds, and account assignments
 
 migrations/
   deploy/                # Sqitch deploy scripts
@@ -263,6 +264,50 @@ The load command uses `DATABASE_URL` by default. Pass `--database-url` to overri
 
 Both dry-run and load are account-scoped. The command only maps supported records whose Flex `accountId` matches `--account-external-id`; supported records for other accounts are counted and reported in the output summary but are not written. Load mode also records the selected account on the ingestion run for auditability.
 
+### Multi-login automated ingestion setup
+
+The automated ingestion workflow (`scripts/run_automated_ingestion.py`) supports multiple distinct broker logins. Each login is modeled as an **integration connection** in the database. Credentials (tokens, query ids) are stored encrypted and decrypted at runtime using the `SUPERFOLIO_CREDENTIAL_MASTER_KEY` environment variable. No per-login credentials are stored as GitHub repository secrets.
+
+Use `scripts/manage_integration_connections.py` to configure connections, credentials, feeds, and account assignments before running the workflow:
+
+```bash
+# 1. Create a connection for a broker login
+python scripts/manage_integration_connections.py create \
+  --integration ibkr_flex_ws \
+  --brokerage-code IBKR \
+  --name "Primary login"
+
+# 2. Store encrypted credentials (plaintext passed via env var, never inline)
+MY_TOKEN="<token>" \
+  python scripts/manage_integration_connections.py set-credential \
+    --connection-id <connection-id> \
+    --credential-name flex_token \
+    --value-from-env MY_TOKEN
+
+# 3. Add a feed (Flex query configuration)
+python scripts/manage_integration_connections.py add-feed \
+  --connection-id <connection-id> \
+  --feed-key primary
+
+# 4. Assign accounts to the connection
+python scripts/manage_integration_connections.py assign-accounts \
+  --connection-id <connection-id> \
+  --brokerage-code IBKR \
+  --account-external-id U100
+
+# 5. Validate assignments before triggering the workflow
+python scripts/manage_integration_connections.py validate-assignments \
+  --target-type portfolio \
+  --portfolio-name "All Accounts" \
+  --brokerage-code IBKR
+
+# 6. List configured connections and feeds
+python scripts/manage_integration_connections.py list-connections
+python scripts/manage_integration_connections.py list-feeds --connection-id <connection-id>
+```
+
+> **⚠️ Adapter fetch not yet implemented.** The `ibkr_flex_ws` adapter raises `NotImplementedError` for the actual HTTP fetch. Connection configuration, credential storage/rotation, feed management, assignment validation, and job lifecycle tracking are all functional. See [`docs/workflows/automated-ingestion.md`](docs/workflows/automated-ingestion.md) for the full setup guide and cutover checklist.
+
 ## 📊 Database Migrations
 
 Database changes are managed with [Sqitch](https://sqitch.org/) against PostgreSQL. Migration scripts live under `migrations/`, with project configuration in [`sqitch.conf`](sqitch.conf).
@@ -274,12 +319,15 @@ migrations/
   deploy/create_books.sql
   deploy/create_mvp_schema.sql
   deploy/create_portfolio_layer.sql
+  deploy/create_automation_layer.sql
   revert/create_books.sql
   revert/create_mvp_schema.sql
   revert/create_portfolio_layer.sql
+  revert/create_automation_layer.sql
   verify/create_books.sql
   verify/create_mvp_schema.sql
   verify/create_portfolio_layer.sql
+  verify/create_automation_layer.sql
   sqitch.plan
 ```
 
@@ -359,6 +407,8 @@ The relational model separates raw broker-origin records from normalized portfol
 * **Ingestion runs and source records** — audit each manual file load and deduplicate broker-origin records.
 * **Cash flows and daily NAV snapshots** — normalized account-scoped facts used by TWR calculations.
 * **Portfolios, portfolio accounts, and transfer bridges** — logical multi-account groupings and in-transit transfer adjustments.
+* **Automation jobs and per-account outcomes** — parent job lifecycle and per-account status for manual workflow runs.
+* **Integration connections, credentials, feeds, and assignments** — multi-login credential storage (encrypted with Fernet) and per-account connection assignments for automated ingestion.
 
 See [`docs/database/schema.md`](docs/database/schema.md) and [`docs/database/functions.md`](docs/database/functions.md) for table relationships, constraints, and PostgreSQL function contracts.
 
@@ -367,6 +417,7 @@ See [`docs/database/schema.md`](docs/database/schema.md) and [`docs/database/fun
 - [x] **PostgreSQL Schema + Manual Ingestion:** Persist supported Flex records to PostgreSQL with idempotent upserts.
 - [x] **Portfolio Layer:** Group registered accounts and calculate portfolio-level TWR with transfer bridge support.
 - [x] **Manual Automation Infrastructure:** Parent automation jobs, account-level outcomes, and manual GitHub Actions trigger for broker ingestion testing.
+- [x] **Multi-Login Credential Management:** Integration connections, encrypted credential storage, feed configuration, and per-account assignments for multi-broker-login automated ingestion.
 - [ ] **Scheduled GitHub Actions Automation:** Scheduled daily Flex XML fetch and TWR recalculation.
 - [ ] **Next.js Dashboard:** Dense, scan-friendly chart UI displaying TWR curve and holding weightings.
 - [ ] **Alpha Attribution:** Decompose returns by sector and timing.
