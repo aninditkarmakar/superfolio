@@ -556,6 +556,7 @@ def _execute_dry_run_multi_feed(
         if not feed_ctxs:
             failed_summary = build_child_summary(error_category="no_active_feeds")
             for child_id, _ in group_pairs:
+                database.mark_automation_job_account_running(child_id)
                 database.finalize_automation_job_account(
                     AutomationJobAccountFinalize(
                         automation_job_account_id=child_id,

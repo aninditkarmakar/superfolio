@@ -3765,6 +3765,21 @@ class CredentialLoadingOrchestratorTests(unittest.TestCase):
 _MULTI_FEED_CASH_XML = "<FlexQueryResponse></FlexQueryResponse>"
 _MULTI_FEED_NAV_XML = "<FlexQueryResponse></FlexQueryResponse>"
 
+# Synthetic XML with real supported records for aggregation tests.
+_MULTI_FEED_CASH_XML_WITH_RECORDS = (
+    '<FlexQueryResponse>'
+    '<CashTransaction accountId="U100" reportDate="20240115"'
+    ' dateTime="20240115;120000" currency="USD" amount="500.00"'
+    ' fxRateToBase="1" type="Deposits/Withdrawals" transactionID="CF-A1" />'
+    '</FlexQueryResponse>'
+)
+_MULTI_FEED_NAV_XML_WITH_RECORDS = (
+    '<FlexQueryResponse>'
+    '<EquitySummaryByReportDateInBase accountId="U100" reportDate="20240115"'
+    ' currency="USD" total="10000.00" />'
+    '</FlexQueryResponse>'
+)
+
 
 class FakeMultiFeedAdapter:
     """Connection-aware adapter with fetch_feed_payload support for Task 12 tests."""
@@ -4032,6 +4047,57 @@ class DryRunMultiFeedTests(unittest.TestCase):
         self._run(_make_accounts_dry_run_request("U100"), db=db, adapter=adapter)
 
         self.assertEqual(adapter.fetched_feed_keys, [])
+
+    def test_dry_run_no_active_feeds_marks_child_running_before_finalize(self) -> None:
+        """no_active_feeds path must call mark_automation_job_account_running before finalize."""
+        db = _configured_db_with_connection_feeds([])
+        adapter = FakeMultiFeedAdapter(payload_by_feed={})
+
+        self._run(_make_accounts_dry_run_request("U100"), db=db, adapter=adapter)
+
+        # Child must have been marked running.
+        self.assertIn("child-1", db.running_children)
+        # mark_running must precede finalize in the event log.
+        mark_idx = db._event_log.index("mark_running:child-1")
+        finalize_idx = db._event_log.index("finalize_child:child-1")
+        self.assertLess(mark_idx, finalize_idx)
+
+    def test_dry_run_two_feeds_record_counts_aggregated(self) -> None:
+        """Successful cash+nav feeds: child record_counts sums non-zero counts across both feeds."""
+        db = _configured_db_with_connection_feeds(["cash", "nav"])
+        adapter = FakeMultiFeedAdapter(
+            payload_by_feed={
+                "cash": _MULTI_FEED_CASH_XML_WITH_RECORDS,
+                "nav": _MULTI_FEED_NAV_XML_WITH_RECORDS,
+            }
+        )
+
+        self._run(_make_accounts_dry_run_request("U100"), db=db, adapter=adapter)
+
+        child = self._find_child(db, "child-1")
+        self.assertIsNotNone(child)
+        rc = child.summary["record_counts"]
+        # Each feed contributed at least one supported record.
+        self.assertGreater(rc["cash_flows"]["supported"], 0)
+        self.assertGreater(rc["daily_nav_snapshots"]["supported"], 0)
+
+    def test_dry_run_failed_feed_contributes_zero_counts(self) -> None:
+        """A failed feed must not contribute counts; only the succeeded feed adds to aggregate."""
+        db = _configured_db_with_connection_feeds(["cash", "nav"])
+        adapter = FakeMultiFeedAdapter(
+            payload_by_feed={"cash": _MULTI_FEED_CASH_XML_WITH_RECORDS},
+            failing_feed_keys={"nav"},
+        )
+
+        self._run(_make_accounts_dry_run_request("U100"), db=db, adapter=adapter)
+
+        child = self._find_child(db, "child-1")
+        self.assertIsNotNone(child)
+        rc = child.summary["record_counts"]
+        # Cash feed succeeded; its counts must be positive.
+        self.assertGreater(rc["cash_flows"]["supported"], 0)
+        # Nav feed failed; nav counts must remain zero.
+        self.assertEqual(rc["daily_nav_snapshots"]["supported"], 0)
 
 
 if __name__ == "__main__":
