@@ -40,6 +40,13 @@ class AutomationWorkflowTests(unittest.TestCase):
         self.assertIn("python scripts/run_automated_ingestion.py", text)
         self.assertIn("DATABASE_URL: ${{ secrets.DATABASE_URL }}", text)
 
+    def test_workflow_requires_master_key_secret(self) -> None:
+        text = Path(".github/workflows/manual-ingestion.yml").read_text(encoding="utf-8")
+
+        self.assertIn("SUPERFOLIO_CREDENTIAL_MASTER_KEY", text)
+        self.assertNotIn("IBKR_FLEX_TOKEN:", text)
+        self.assertNotIn("IBKR_FLEX_QUERY_ID:", text)
+
     def test_workflow_uses_master_key_not_per_login_secrets(self) -> None:
         text = Path(".github/workflows/manual-ingestion.yml").read_text(encoding="utf-8")
 

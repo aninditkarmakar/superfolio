@@ -7,6 +7,11 @@ from io import StringIO
 from portfolio_engine.automation.cli import run
 
 
+def _result(status: str):
+    """Build a minimal automation result object."""
+    return type("Result", (), {"status": status, "summary": {}, "error_message": None})()
+
+
 class AutomationCliTests(unittest.TestCase):
     def test_accounts_target_parses_and_runs(self) -> None:
         calls = []
@@ -200,6 +205,25 @@ class AutomationCliTests(unittest.TestCase):
 
         self.assertEqual(entered, [True])
         self.assertEqual(exited, [True])
+
+    def test_automation_cli_does_not_require_connection_input(self) -> None:
+        stdout = StringIO()
+
+        exit_code = run(
+            [
+                "--target-type", "accounts",
+                "--integration", "ibkr_flex_ws",
+                "--mode", "dry-run",
+                "--start-date", "2026-05-01",
+                "--end-date", "2026-05-14",
+                "--account-external-ids", "U100",
+            ],
+            stdout=stdout,
+            runner=lambda request, database: _result("succeeded"),
+            database_connector=lambda: object(),
+        )
+
+        self.assertEqual(exit_code, 0)
 
 
 if __name__ == "__main__":
