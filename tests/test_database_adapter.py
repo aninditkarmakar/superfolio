@@ -1156,7 +1156,7 @@ class IntegrationConnectionAdapterTests(unittest.TestCase):
         result = db.create_integration_feed(
             IntegrationFeedCreate(
                 connection_id="connection-uuid",
-                feed_key="ibkr_flex_ws:cash_flows",
+                feed_key="ibkr_cash_flows",
                 display_name="Cash Flows",
             )
         )
@@ -1165,7 +1165,7 @@ class IntegrationConnectionAdapterTests(unittest.TestCase):
         self.assertIn("public.create_integration_feed", connection.statements[0][0])
         self.assertEqual(
             connection.statements[0][1],
-            ("connection-uuid", "ibkr_flex_ws:cash_flows", "Cash Flows"),
+            ("connection-uuid", "ibkr_cash_flows", "Cash Flows"),
         )
 
     def test_create_integration_feed_allows_null_display_name(self) -> None:
@@ -1175,7 +1175,7 @@ class IntegrationConnectionAdapterTests(unittest.TestCase):
         db.create_integration_feed(
             IntegrationFeedCreate(
                 connection_id="connection-uuid",
-                feed_key="ibkr_flex_ws:cash_flows",
+                feed_key="ibkr_cash_flows",
             )
         )
 

@@ -540,6 +540,14 @@ class IntegrationConnectionFunctionTests(unittest.TestCase):
             sql,
         )
 
+    def test_deploy_validate_assignments_guards_null_account_external_ids(self) -> None:
+        sql = self.DEPLOY.read_text(encoding="utf-8")
+
+        self.assertIn(
+            "validate_account_integration_assignments requires account_external_ids when target_type is accounts",
+            sql,
+        )
+
     def test_deploy_defines_list_integration_connections(self) -> None:
         sql = self.DEPLOY.read_text(encoding="utf-8")
 

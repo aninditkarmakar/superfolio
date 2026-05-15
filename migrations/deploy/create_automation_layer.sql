@@ -668,6 +668,9 @@ BEGIN
           )
         ORDER BY a.external_id;
     ELSE
+        IF p_account_external_ids IS NULL THEN
+            RAISE EXCEPTION 'validate_account_integration_assignments requires account_external_ids when target_type is accounts';
+        END IF;
         RETURN QUERY
         SELECT a.external_id::TEXT
         FROM public.accounts a
