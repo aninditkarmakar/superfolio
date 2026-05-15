@@ -266,6 +266,13 @@ def _cmd_assign_portfolio(args: list[str], *, stdout: Any, stderr: Any, database
         print(_SANITIZED_ERROR, file=stderr)
         return 1
 
+    if not account_external_ids:
+        print(
+            f"error: no accounts found for portfolio {ns.portfolio_name!r} with brokerage code {ns.brokerage_code!r}",
+            file=stderr,
+        )
+        return 1
+
     for external_id in account_external_ids:
         request = AccountIntegrationAssignmentSet(
             brokerage_code=ns.brokerage_code,
@@ -291,6 +298,14 @@ def _cmd_validate_assignments(args: list[str], *, stdout: Any, stderr: Any, data
     parser.add_argument("--account-external-id", action="append", default=[], dest="account_external_ids")
     ns = _parse_args(parser, args, stderr=stderr)
     if ns is None:
+        return 1
+
+    if ns.target_type == "account_list" and not ns.account_external_ids:
+        print("error: --target-type account_list requires at least one --account-external-id", file=stderr)
+        return 1
+
+    if ns.target_type == "portfolio" and not ns.portfolio_name:
+        print("error: --target-type portfolio requires --portfolio-name", file=stderr)
         return 1
 
     try:

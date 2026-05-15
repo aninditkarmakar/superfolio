@@ -608,5 +608,90 @@ class ConnectionCliTests(unittest.TestCase):
         self.assertNotIn("postgresql://", err)
 
 
+    def test_assign_portfolio_returns_1_when_no_accounts_found(self) -> None:
+        """assign-portfolio must return 1 and write to stderr when no accounts are found."""
+        db_calls = []
+
+        class FakeDatabase:
+            def list_portfolio_account_external_ids(self, *, portfolio_name, brokerage_code):
+                db_calls.append(("list", portfolio_name, brokerage_code))
+                return []
+
+            def set_account_integration_assignment(self, request):
+                db_calls.append(("assign", request))
+                return "assignment-id"
+
+        stderr = StringIO()
+        code = run(
+            [
+                "assign-portfolio",
+                "--connection-id", "conn-id",
+                "--portfolio-name", "EmptyPortfolio",
+                "--brokerage-code", "IBKR",
+            ],
+            stdout=StringIO(),
+            stderr=stderr,
+            database_connector=lambda: FakeDatabase(),
+            environ={},
+        )
+
+        self.assertEqual(code, 1)
+        assign_calls = [c for c in db_calls if c[0] == "assign"]
+        self.assertEqual(len(assign_calls), 0)
+        self.assertTrue(len(stderr.getvalue()) > 0)
+
+    def test_validate_assignments_account_list_without_accounts_returns_1(self) -> None:
+        """validate-assignments --target-type account_list must return 1 if no --account-external-id given."""
+        db_calls = []
+
+        class FakeDatabase:
+            def validate_account_integration_assignments(self, **kwargs):
+                db_calls.append(kwargs)
+                return []
+
+        stderr = StringIO()
+        code = run(
+            [
+                "validate-assignments",
+                "--target-type", "account_list",
+                "--brokerage-code", "IBKR",
+            ],
+            stdout=StringIO(),
+            stderr=stderr,
+            database_connector=lambda: FakeDatabase(),
+            environ={},
+        )
+
+        self.assertEqual(code, 1)
+        self.assertEqual(len(db_calls), 0)
+        self.assertTrue(len(stderr.getvalue()) > 0)
+
+    def test_validate_assignments_portfolio_without_portfolio_name_returns_1(self) -> None:
+        """validate-assignments --target-type portfolio must return 1 if no --portfolio-name given."""
+        db_calls = []
+
+        class FakeDatabase:
+            def validate_account_integration_assignments(self, **kwargs):
+                db_calls.append(kwargs)
+                return []
+
+        stderr = StringIO()
+        code = run(
+            [
+                "validate-assignments",
+                "--target-type", "portfolio",
+                "--brokerage-code", "IBKR",
+            ],
+            stdout=StringIO(),
+            stderr=stderr,
+            database_connector=lambda: FakeDatabase(),
+            environ={},
+        )
+
+        self.assertEqual(code, 1)
+        self.assertEqual(len(db_calls), 0)
+        self.assertTrue(len(stderr.getvalue()) > 0)
+
+
 if __name__ == "__main__":
     unittest.main()
