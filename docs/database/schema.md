@@ -152,7 +152,9 @@ Key constraints:
 - `connection_id` references `integration_connections(id)` and must belong to the same brokerage as the account.
 - `is_active` tracks whether the assignment is currently effective.
 
-### `portfolio_transfer_bridges` Source and destination accounts must both be portfolio members, bridge currency must match the portfolio reporting currency, and overlapping bridge windows for the same source/destination account pair are rejected.
+### `portfolio_transfer_bridges`
+
+Stores explicit in-transit transfer adjustments for a portfolio. Source and destination accounts must both be portfolio members, bridge currency must match the portfolio reporting currency, and overlapping bridge windows for the same source/destination account pair are rejected.
 
 ## Deduplication model
 

@@ -151,9 +151,11 @@ Automation functions manage the full lifecycle of a parent automation job and it
 | --- | --- |
 | `create_automation_job(...)` | Creates a new `pending` automation job row with target type, integration, mode, and requested date range. Returns the new job id. |
 | `finalize_automation_job(...)` | Transitions the parent job to `succeeded`, `partially_succeeded`, or `failed` and records a sanitized summary and optional error message. |
-| `add_automation_job_account(...)` | Appends a `pending` per-account child row to an automation job, including an optional `connection_id` snapshot recording which integration connection was assigned to the account at the time the job was created. |
+| `add_automation_job_account(...)` | Appends a `pending` per-account child row to an automation job. |
 | `mark_automation_job_account_running(...)` | Transitions a child account row to `running`. |
 | `finalize_automation_job_account(...)` | Finalizes a child account row with a terminal status, optional `ingestion_run_id` (load mode only), sanitized summary counts, and optional error message. |
+
+`add_automation_job_account` accepts an optional `connection_id` parameter that snapshots which integration connection was assigned to the account at the time the job was created.
 
 **Target resolution:**
 
