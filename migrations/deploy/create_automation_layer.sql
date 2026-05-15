@@ -732,4 +732,110 @@ AS $$
     ORDER BY feed_key;
 $$;
 
+CREATE FUNCTION public.resolve_automation_targets_with_connections(
+    p_target_type TEXT,
+    p_portfolio_name TEXT,
+    p_brokerage_code TEXT,
+    p_account_external_ids TEXT[]
+)
+RETURNS TABLE (
+    account_id UUID,
+    brokerage_code TEXT,
+    account_external_id TEXT,
+    base_currency TEXT,
+    display_name TEXT,
+    connection_id UUID,
+    connection_name TEXT
+)
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    v_target_type TEXT;
+BEGIN
+    v_target_type := lower(btrim(coalesce(p_target_type, '')));
+
+    IF v_target_type NOT IN ('accounts', 'portfolio') THEN
+        RAISE EXCEPTION 'resolve_automation_targets_with_connections: invalid target_type "%"', p_target_type;
+    END IF;
+
+    IF p_brokerage_code IS NULL OR btrim(p_brokerage_code) = '' THEN
+        RAISE EXCEPTION 'automation target resolution requires brokerage_code';
+    END IF;
+
+    IF v_target_type = 'portfolio' THEN
+        IF p_portfolio_name IS NULL OR btrim(p_portfolio_name) = '' THEN
+            RAISE EXCEPTION 'target_type=portfolio requires portfolio_name';
+        END IF;
+
+        RETURN QUERY
+        SELECT
+            a.id,
+            b.code::TEXT,
+            a.external_id::TEXT,
+            a.base_currency::TEXT,
+            a.display_name::TEXT,
+            c.id,
+            c.name::TEXT
+        FROM public.portfolio_accounts pa
+        JOIN public.portfolios p ON p.id = pa.portfolio_id
+        JOIN public.accounts a ON a.id = pa.account_id
+        JOIN public.brokerages b ON b.id = a.brokerage_id
+        LEFT JOIN public.account_integration_assignments aia
+            ON aia.account_id = a.id
+            AND aia.is_active = true
+        LEFT JOIN public.integration_connections c
+            ON c.id = aia.connection_id
+            AND c.is_active = true
+            AND c.brokerage_id = b.id
+        WHERE p.name = btrim(p_portfolio_name)
+          AND p.is_active = true
+          AND a.is_active = true
+          AND b.is_active = true
+          AND b.code = upper(btrim(p_brokerage_code))
+        ORDER BY b.code, a.external_id;
+
+    ELSE
+        IF p_account_external_ids IS NULL OR array_length(p_account_external_ids, 1) IS NULL THEN
+            RAISE EXCEPTION 'target_type=accounts requires account_external_ids';
+        END IF;
+
+        IF NOT EXISTS (
+            SELECT 1
+            FROM unnest(p_account_external_ids) AS requested(account_external_id)
+            WHERE btrim(requested.account_external_id) <> ''
+        ) THEN
+            RAISE EXCEPTION 'target_type=accounts requires at least one non-blank account_external_id';
+        END IF;
+
+        RETURN QUERY
+        SELECT
+            a.id,
+            b.code::TEXT,
+            a.external_id::TEXT,
+            a.base_currency::TEXT,
+            a.display_name::TEXT,
+            c.id,
+            c.name::TEXT
+        FROM public.accounts a
+        JOIN public.brokerages b ON b.id = a.brokerage_id
+        LEFT JOIN public.account_integration_assignments aia
+            ON aia.account_id = a.id
+            AND aia.is_active = true
+        LEFT JOIN public.integration_connections c
+            ON c.id = aia.connection_id
+            AND c.is_active = true
+            AND c.brokerage_id = b.id
+        WHERE b.code = upper(btrim(p_brokerage_code))
+          AND b.is_active = true
+          AND a.is_active = true
+          AND a.external_id IN (
+              SELECT btrim(requested.account_external_id)
+              FROM unnest(p_account_external_ids) AS requested(account_external_id)
+              WHERE btrim(requested.account_external_id) <> ''
+          )
+        ORDER BY b.code, a.external_id;
+    END IF;
+END;
+$$;
+
 COMMIT;

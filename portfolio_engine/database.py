@@ -112,6 +112,17 @@ class AutomationAccountTarget:
 
 
 @dataclass(frozen=True)
+class AutomationConnectionTarget:
+    account_id: str
+    brokerage_code: str
+    account_external_id: str
+    base_currency: str
+    display_name: str | None
+    connection_id: str | None
+    connection_name: str | None
+
+
+@dataclass(frozen=True)
 class IntegrationConnectionCreate:
     integration_key: str
     brokerage_code: str
@@ -293,6 +304,20 @@ class SuperFolioDatabase:
             (brokerage_code, account_external_ids),
         )
         return [_automation_account_target_from_row(row) for row in rows]
+
+    def resolve_automation_targets_with_connections(
+        self,
+        *,
+        target_type: str,
+        portfolio_name: str | None,
+        brokerage_code: str,
+        account_external_ids: list[str],
+    ) -> list[AutomationConnectionTarget]:
+        rows = self._fetch_all(
+            "SELECT * FROM public.resolve_automation_targets_with_connections(%s, %s, %s, %s)",
+            (target_type, portfolio_name, brokerage_code, account_external_ids),
+        )
+        return [_automation_connection_target_from_row(row) for row in rows]
 
     def fail_stale_automation_runs(self, *, stale_before: datetime, error_message: str) -> int:
         row = self._fetch_one(
@@ -736,6 +761,18 @@ def _automation_account_target_from_row(row: tuple[Any, ...]) -> AutomationAccou
         account_external_id=str(row[2]),
         base_currency=str(row[3]),
         display_name=None if row[4] is None else str(row[4]),
+    )
+
+
+def _automation_connection_target_from_row(row: tuple[Any, ...]) -> AutomationConnectionTarget:
+    return AutomationConnectionTarget(
+        account_id=str(row[0]),
+        brokerage_code=str(row[1]),
+        account_external_id=str(row[2]),
+        base_currency=str(row[3]),
+        display_name=None if row[4] is None else str(row[4]),
+        connection_id=None if row[5] is None else str(row[5]),
+        connection_name=None if row[6] is None else str(row[6]),
     )
 
 

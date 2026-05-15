@@ -13,6 +13,7 @@ from portfolio_engine.database import (
     AccountIntegrationAssignmentSet,
     AccountRegistration,
     AutomationAccountTarget,
+    AutomationConnectionTarget,
     AutomationJobAccountAdd,
     AutomationJobAccountFinalize,
     AutomationJobFinalize,
@@ -1360,6 +1361,108 @@ class IntegrationConnectionAdapterTests(unittest.TestCase):
 
         with self.assertRaises(FrozenInstanceError):
             request.connection_id = "other-uuid"  # type: ignore[misc]
+
+
+class AutomationConnectionTargetResolutionTests(unittest.TestCase):
+    def test_resolve_automation_targets_with_connections_maps_nullable_connection(self) -> None:
+        connection = FakeConnection(rows=[
+            ("account-1", "IBKR", "U100", "USD", "Taxable", "connection-1", "IBKR Personal"),
+            ("account-2", "IBKR", "U200", "USD", "IRA", None, None),
+        ])
+        db = SuperFolioDatabase(connection)
+
+        results = db.resolve_automation_targets_with_connections(
+            target_type="accounts",
+            portfolio_name=None,
+            brokerage_code="IBKR",
+            account_external_ids=["U100", "U200"],
+        )
+
+        self.assertEqual(results[0].connection_id, "connection-1")
+        self.assertIsNone(results[1].connection_id)
+
+    def test_resolve_automation_targets_with_connections_maps_all_fields(self) -> None:
+        connection = FakeConnection(rows=[
+            ("account-1", "IBKR", "U100", "USD", "Taxable", "connection-1", "IBKR Personal"),
+        ])
+        db = SuperFolioDatabase(connection)
+
+        results = db.resolve_automation_targets_with_connections(
+            target_type="accounts",
+            portfolio_name=None,
+            brokerage_code="IBKR",
+            account_external_ids=["U100"],
+        )
+
+        self.assertEqual(len(results), 1)
+        result = results[0]
+        self.assertIsInstance(result, AutomationConnectionTarget)
+        self.assertEqual(result.account_id, "account-1")
+        self.assertEqual(result.brokerage_code, "IBKR")
+        self.assertEqual(result.account_external_id, "U100")
+        self.assertEqual(result.base_currency, "USD")
+        self.assertEqual(result.display_name, "Taxable")
+        self.assertEqual(result.connection_id, "connection-1")
+        self.assertEqual(result.connection_name, "IBKR Personal")
+
+    def test_resolve_automation_targets_with_connections_null_display_name(self) -> None:
+        connection = FakeConnection(rows=[
+            ("account-1", "IBKR", "U100", "USD", None, None, None),
+        ])
+        db = SuperFolioDatabase(connection)
+
+        results = db.resolve_automation_targets_with_connections(
+            target_type="accounts",
+            portfolio_name=None,
+            brokerage_code="IBKR",
+            account_external_ids=["U100"],
+        )
+
+        self.assertIsNone(results[0].display_name)
+        self.assertIsNone(results[0].connection_id)
+        self.assertIsNone(results[0].connection_name)
+
+    def test_resolve_automation_targets_with_connections_calls_db_function(self) -> None:
+        connection = FakeConnection(rows=[])
+        db = SuperFolioDatabase(connection)
+
+        db.resolve_automation_targets_with_connections(
+            target_type="portfolio",
+            portfolio_name="My Portfolio",
+            brokerage_code="IBKR",
+            account_external_ids=[],
+        )
+
+        sql, params = connection.statements[0]
+        self.assertIn("public.resolve_automation_targets_with_connections", sql)
+        self.assertEqual(params, ("portfolio", "My Portfolio", "IBKR", []))
+
+    def test_resolve_automation_targets_with_connections_returns_empty_list(self) -> None:
+        connection = FakeConnection(rows=[])
+        db = SuperFolioDatabase(connection)
+
+        results = db.resolve_automation_targets_with_connections(
+            target_type="accounts",
+            portfolio_name=None,
+            brokerage_code="IBKR",
+            account_external_ids=["U999"],
+        )
+
+        self.assertEqual(results, [])
+
+    def test_automation_connection_target_is_immutable(self) -> None:
+        target = AutomationConnectionTarget(
+            account_id="account-1",
+            brokerage_code="IBKR",
+            account_external_id="U100",
+            base_currency="USD",
+            display_name="Taxable",
+            connection_id="connection-1",
+            connection_name="IBKR Personal",
+        )
+
+        with self.assertRaises(FrozenInstanceError):
+            target.connection_id = "other"  # type: ignore[misc]
 
 
 if __name__ == "__main__":

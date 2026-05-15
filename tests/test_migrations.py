@@ -256,7 +256,7 @@ class MigrationContractTests(unittest.TestCase):
     def test_automation_layer_target_resolution_requires_brokerage_code(self) -> None:
         sql = (MIGRATIONS_DIR / "deploy" / "create_automation_layer.sql").read_text(encoding="utf-8")
 
-        self.assertEqual(2, sql.count("p_brokerage_code IS NULL OR btrim(p_brokerage_code) = ''"))
+        self.assertEqual(3, sql.count("p_brokerage_code IS NULL OR btrim(p_brokerage_code) = ''"))
         self.assertIn("automation target resolution requires brokerage_code", sql)
 
     def test_automation_layer_stale_cleanup_fails_pending_children_of_stale_parents(self) -> None:
@@ -627,6 +627,73 @@ class IntegrationConnectionFunctionTests(unittest.TestCase):
         sql = self.VERIFY.read_text(encoding="utf-8")
 
         self.assertIn("count(*) = 7", sql)
+
+
+class AutomationConnectionTargetResolutionMigrationTests(unittest.TestCase):
+    DEPLOY = Path("migrations/deploy/create_automation_layer.sql")
+    REVERT = Path("migrations/revert/create_automation_layer.sql")
+    VERIFY = Path("migrations/verify/create_automation_layer.sql")
+
+    def test_deploy_defines_resolve_automation_targets_with_connections(self) -> None:
+        sql = self.DEPLOY.read_text(encoding="utf-8")
+
+        self.assertIn("CREATE FUNCTION public.resolve_automation_targets_with_connections", sql)
+        self.assertIn("p_target_type TEXT", sql)
+        self.assertIn("p_portfolio_name TEXT", sql)
+        self.assertIn("p_brokerage_code TEXT", sql)
+        self.assertIn("p_account_external_ids TEXT[]", sql)
+
+    def test_deploy_resolver_returns_connection_columns(self) -> None:
+        sql = self.DEPLOY.read_text(encoding="utf-8")
+
+        self.assertIn("connection_id UUID", sql)
+        self.assertIn("connection_name TEXT", sql)
+
+    def test_deploy_resolver_left_joins_assignments_and_connections(self) -> None:
+        sql = self.DEPLOY.read_text(encoding="utf-8")
+
+        self.assertIn("LEFT JOIN public.account_integration_assignments", sql)
+        self.assertIn("LEFT JOIN public.integration_connections", sql)
+
+    def test_deploy_resolver_filters_active_assignments(self) -> None:
+        sql = self.DEPLOY.read_text(encoding="utf-8")
+
+        self.assertIn("aia.is_active = true", sql)
+
+    def test_deploy_resolver_filters_active_connections(self) -> None:
+        sql = self.DEPLOY.read_text(encoding="utf-8")
+
+        self.assertIn("c.is_active = true", sql)
+
+    def test_deploy_resolver_guards_same_brokerage_connection(self) -> None:
+        sql = self.DEPLOY.read_text(encoding="utf-8")
+
+        self.assertIn("c.brokerage_id = b.id", sql)
+
+    def test_deploy_resolver_rejects_invalid_target_type(self) -> None:
+        sql = self.DEPLOY.read_text(encoding="utf-8")
+
+        self.assertIn("invalid target_type", sql)
+        self.assertIn("NOT IN ('accounts', 'portfolio')", sql)
+
+    def test_revert_drops_resolver_before_tables(self) -> None:
+        sql = self.REVERT.read_text(encoding="utf-8")
+
+        self.assertIn(
+            "DROP FUNCTION IF EXISTS public.resolve_automation_targets_with_connections(TEXT, TEXT, TEXT, TEXT[]);",
+            sql,
+        )
+        func_pos = sql.index("DROP FUNCTION IF EXISTS public.resolve_automation_targets_with_connections")
+        table_pos = sql.index("DROP TABLE IF EXISTS public.integration_connections")
+        self.assertLess(func_pos, table_pos)
+
+    def test_verify_checks_resolver_function_signature(self) -> None:
+        sql = self.VERIFY.read_text(encoding="utf-8")
+
+        self.assertIn(
+            "to_regprocedure('public.resolve_automation_targets_with_connections(text,text,text,text[])')",
+            sql,
+        )
 
 
 if __name__ == "__main__":
