@@ -105,15 +105,38 @@ def run_automation(request: AutomationRunRequest, *, database, adapter=None) -> 
         )
 
     child_pairs: list[tuple[str, Any]] = []
+    # Statuses/summaries for targets that lack a connection assignment (failed immediately).
+    early_failed_statuses: list[str] = []
+    early_failed_summaries: list[dict[str, Any]] = []
+    # Accounts that have a valid connection assignment and proceed to execution.
+    assigned_pairs: list[tuple[str, Any]] = []
     try:
         for account in accounts:
             child_id = database.add_automation_job_account(
                 AutomationJobAccountAdd(
                     automation_job_id=job_id,
                     account_id=account.account_id,
+                    connection_id=getattr(account, "connection_id", None),
                 )
             )
             child_pairs.append((child_id, account))
+
+            if getattr(account, "connection_id", None) is None:
+                # No integration connection assigned — fail this child immediately.
+                failed_summary = build_child_summary(error_category="missing_integration_connection")
+                database.finalize_automation_job_account(
+                    AutomationJobAccountFinalize(
+                        automation_job_account_id=child_id,
+                        status="failed",
+                        ingestion_run_id=None,
+                        summary=failed_summary,
+                        error_message="missing_integration_connection",
+                    )
+                )
+                early_failed_statuses.append("failed")
+                early_failed_summaries.append(failed_summary)
+            else:
+                assigned_pairs.append((child_id, account))
     except Exception as exc:
         error_message = sanitize_error_message(str(exc))
         summary = build_parent_summary([], [])
@@ -129,12 +152,20 @@ def run_automation(request: AutomationRunRequest, *, database, adapter=None) -> 
 
     child_ids = [cid for cid, _ in child_pairs]
 
+    # Group assigned accounts by connection_id for Task 11 (credential loading per connection).
+    connection_groups: dict[str, list[tuple[str, Any]]] = {}
+    for child_id, account in assigned_pairs:
+        cid = account.connection_id  # guaranteed non-None for assigned_pairs
+        if cid not in connection_groups:
+            connection_groups[cid] = []
+        connection_groups[cid].append((child_id, account))
+
     try:
         adapter.preflight_validate_config(config)
     except RuntimeError as exc:
         error_message = sanitize_error_message(str(exc))
         failed_child_summary = build_child_summary(error_category="preflight_failed")
-        for child_id, _ in child_pairs:
+        for child_id, _ in assigned_pairs:
             database.finalize_automation_job_account(
                 AutomationJobAccountFinalize(
                     automation_job_account_id=child_id,
@@ -144,8 +175,12 @@ def run_automation(request: AutomationRunRequest, *, database, adapter=None) -> 
                     error_message=error_message,
                 )
             )
-        child_statuses_preflight = ["failed"] * len(child_pairs)
-        child_summaries_preflight = [failed_child_summary] * len(child_pairs)
+        child_statuses_preflight = (
+            early_failed_statuses + ["failed"] * len(assigned_pairs)
+        )
+        child_summaries_preflight = (
+            early_failed_summaries + [failed_child_summary] * len(assigned_pairs)
+        )
         summary = build_parent_summary(child_statuses_preflight, child_summaries_preflight)
         database.finalize_automation_job(
             AutomationJobFinalize(
@@ -167,7 +202,7 @@ def run_automation(request: AutomationRunRequest, *, database, adapter=None) -> 
     child_summaries: list[dict[str, Any]] = []
 
     if request.mode == "dry-run":
-        for child_id, account in child_pairs:
+        for child_id, account in assigned_pairs:
             database.mark_automation_job_account_running(child_id)
             try:
                 payload = adapter.fetch_payload(account, request, config)
@@ -204,7 +239,7 @@ def run_automation(request: AutomationRunRequest, *, database, adapter=None) -> 
             child_statuses.append("succeeded")
             child_summaries.append(child_summary)
     else:
-        for child_id, account in child_pairs:
+        for child_id, account in assigned_pairs:
             database.mark_automation_job_account_running(child_id)
             try:
                 if request.mode == "load" and database.has_overlapping_automation_load(
@@ -255,8 +290,10 @@ def run_automation(request: AutomationRunRequest, *, database, adapter=None) -> 
             child_statuses.append(child_status)
             child_summaries.append(child_summary)
 
-    parent_status = _derive_parent_status(child_statuses)
-    parent_summary = build_parent_summary(child_statuses, child_summaries)
+    all_statuses = early_failed_statuses + child_statuses
+    all_summaries = early_failed_summaries + child_summaries
+    parent_status = _derive_parent_status(all_statuses)
+    parent_summary = build_parent_summary(all_statuses, all_summaries)
     database.finalize_automation_job(
         AutomationJobFinalize(
             automation_job_id=job_id,
@@ -275,12 +312,9 @@ def run_automation(request: AutomationRunRequest, *, database, adapter=None) -> 
 
 def _resolve_accounts(request: AutomationRunRequest, config, database) -> list:
     """Resolve the target accounts for the automation run from the database."""
-    if request.target_type == "portfolio":
-        return database.resolve_automation_portfolio_accounts(
-            portfolio_name=request.portfolio_name or "",
-            brokerage_code=config.brokerage_code,
-        )
-    return database.resolve_automation_account_targets(
+    return database.resolve_automation_targets_with_connections(
+        target_type=request.target_type,
+        portfolio_name=request.portfolio_name or "",
         brokerage_code=config.brokerage_code,
         account_external_ids=list(request.account_external_ids),
     )

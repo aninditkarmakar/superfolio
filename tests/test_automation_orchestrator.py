@@ -204,6 +204,9 @@ class FakeAutomationDatabase:
         # Portfolio id resolution (Issue 1 fix)
         self.portfolio_id_by_name: dict[str, str] = {}
         self.portfolio_id_lookup_calls: list[str] = []
+        # Connection-aware target resolution (Task 10)
+        self.connection_targets: list | None = None
+        self.connection_resolve_calls: list = []
 
     def fail_stale_automation_runs(self, *, stale_before, error_message) -> int:
         self._event_log.append("fail_stale")
@@ -246,6 +249,40 @@ class FakeAutomationDatabase:
     def resolve_automation_account_targets(self, *, brokerage_code, account_external_ids):
         self.account_resolve_calls.append({"brokerage_code": brokerage_code, "account_external_ids": account_external_ids})
         return list(self.account_targets)
+
+    def resolve_automation_targets_with_connections(
+        self,
+        *,
+        target_type: str,
+        portfolio_name: str | None,
+        brokerage_code: str,
+        account_external_ids: list,
+    ):
+        """Return connection-aware targets. Falls back to converting account_targets / portfolio_accounts
+        (with a default non-null connection_id) when connection_targets has not been set explicitly."""
+        from portfolio_engine.database import AutomationConnectionTarget
+        self.connection_resolve_calls.append({
+            "target_type": target_type,
+            "portfolio_name": portfolio_name,
+            "brokerage_code": brokerage_code,
+            "account_external_ids": account_external_ids,
+        })
+        if self.connection_targets is not None:
+            return list(self.connection_targets)
+        # Backward-compat fallback: convert existing account_targets / portfolio_accounts
+        source = self.portfolio_accounts if target_type == "portfolio" else self.account_targets
+        return [
+            AutomationConnectionTarget(
+                account_id=t.account_id,
+                brokerage_code=t.brokerage_code,
+                account_external_id=t.account_external_id,
+                base_currency=t.base_currency,
+                display_name=t.display_name,
+                connection_id="test-connection-id",
+                connection_name="Test Connection",
+            )
+            for t in source
+        ]
 
     def add_automation_job_account(self, request) -> str:
         self._child_counter += 1
@@ -588,7 +625,7 @@ class AutomationOrchestratorTargetResolutionTests(unittest.TestCase):
         self.assertEqual(child_req.account_id, "account-uuid")
 
     def test_portfolio_target_resolution_creates_child_row(self):
-        """Portfolio target calls resolve_automation_portfolio_accounts and adds a child row."""
+        """Portfolio target calls resolve_automation_targets_with_connections and adds a child row."""
         request = self._make_portfolio_request()
         db = FakeAutomationDatabase()
         db.portfolio_id_by_name["MyPortfolio"] = "portfolio-uuid"
@@ -596,13 +633,13 @@ class AutomationOrchestratorTargetResolutionTests(unittest.TestCase):
 
         self._run(request, db)
 
-        self.assertEqual(len(db.portfolio_resolve_calls), 1)
+        self.assertEqual(len(db.connection_resolve_calls), 1)
         self.assertEqual(len(db.added_accounts), 1)
         _child_id, child_req = db.added_accounts[0]
         self.assertEqual(child_req.account_id, "port-acct-uuid")
 
     def test_portfolio_resolution_passes_portfolio_name_and_brokerage(self):
-        """resolve_automation_portfolio_accounts is called with portfolio_name and brokerage_code."""
+        """resolve_automation_targets_with_connections is called with portfolio_name and brokerage_code."""
         request = self._make_portfolio_request(portfolio_name="MyPortfolio")
         db = FakeAutomationDatabase()
         db.portfolio_id_by_name["MyPortfolio"] = "portfolio-uuid"
@@ -610,8 +647,8 @@ class AutomationOrchestratorTargetResolutionTests(unittest.TestCase):
 
         self._run(request, db)
 
-        self.assertEqual(len(db.portfolio_resolve_calls), 1)
-        call = db.portfolio_resolve_calls[0]
+        self.assertEqual(len(db.connection_resolve_calls), 1)
+        call = db.connection_resolve_calls[0]
         self.assertEqual(call["portfolio_name"], "MyPortfolio")
         self.assertEqual(call["brokerage_code"], "IBKR")
 
@@ -648,8 +685,8 @@ class AutomationOrchestratorTargetResolutionTests(unittest.TestCase):
 
         self._run(request, db)
 
-        self.assertEqual(len(db.account_resolve_calls), 1)
-        call = db.account_resolve_calls[0]
+        self.assertEqual(len(db.connection_resolve_calls), 1)
+        call = db.connection_resolve_calls[0]
         self.assertEqual(call["brokerage_code"], "IBKR")
         self.assertIn("U100", call["account_external_ids"])
         self.assertIn("U200", call["account_external_ids"])
@@ -2658,7 +2695,7 @@ class PortfolioJobPortfolioIdResolutionTests(unittest.TestCase):
 
         self._run(request, db)
 
-        self.assertEqual(len(db.portfolio_resolve_calls), 1)
+        self.assertEqual(len(db.connection_resolve_calls), 1)
         self.assertEqual(len(db.added_accounts), 1)
 
 
@@ -3041,6 +3078,267 @@ class AdapterContextTests(unittest.TestCase):
 
         src = inspect.getsource(BrokerAdapter.preflight_connection)
         self.assertIn("...", src, "preflight_connection protocol body must use ellipsis")
+
+
+# ---------------------------------------------------------------------------
+# Task 10: Connection-aware target resolution and child snapshotting
+# ---------------------------------------------------------------------------
+
+SAMPLE_XML = "<FlexQueryResponse></FlexQueryResponse>"
+
+
+def _make_connection_target(
+    account_id: str,
+    account_external_id: str,
+    *,
+    connection_id: str | None,
+    brokerage_code: str = "IBKR",
+    base_currency: str = "USD",
+    display_name: str | None = None,
+    connection_name: str | None = None,
+):
+    from portfolio_engine.database import AutomationConnectionTarget
+    return AutomationConnectionTarget(
+        account_id=account_id,
+        brokerage_code=brokerage_code,
+        account_external_id=account_external_id,
+        base_currency=base_currency,
+        display_name=display_name or account_external_id,
+        connection_id=connection_id,
+        connection_name=connection_name,
+    )
+
+
+def _make_portfolio_run_request(**kwargs):
+    from portfolio_engine.automation.types import AutomationRunRequest
+    defaults = dict(
+        target_type="portfolio",
+        integration_key="ibkr_flex_ws",
+        mode="dry-run",
+        requested_start_date=date(2024, 1, 1),
+        requested_end_date=date(2024, 1, 31),
+        portfolio_name="All Accounts",
+    )
+    defaults.update(kwargs)
+    return AutomationRunRequest(**defaults)
+
+
+def _make_accounts_run_request(**kwargs):
+    from portfolio_engine.automation.types import AutomationRunRequest
+    defaults = dict(
+        target_type="accounts",
+        integration_key="ibkr_flex_ws",
+        mode="dry-run",
+        requested_start_date=date(2024, 1, 1),
+        requested_end_date=date(2024, 1, 31),
+        account_external_ids=("U100", "U200"),
+    )
+    defaults.update(kwargs)
+    return AutomationRunRequest(**defaults)
+
+
+class FakeConnectionAdapter:
+    """Adapter that tracks which account IDs were fetched and returns canned XML."""
+
+    def __init__(self, *, payload_by_feed=None):
+        self.payload_by_feed = payload_by_feed or {}
+        self.fetched_account_ids: list[str] = []
+
+    def preflight_validate_config(self, config) -> None:
+        return None
+
+    def fetch_payload(self, account, request, config):
+        from portfolio_engine.automation.types import BrokerPayload
+        self.fetched_account_ids.append(account.account_id)
+        xml = self.payload_by_feed.get("daily", SAMPLE_XML)
+        return BrokerPayload(xml_text=xml, source_name="fake-connection.xml")
+
+
+class ConnectionAssignmentOrchestratorTests(unittest.TestCase):
+    """Tests for Task 10: connection-aware target resolution and missing-assignment handling."""
+
+    def _run(self, request, db, adapter=None):
+        from portfolio_engine.automation.orchestrator import run_automation
+        if adapter is None:
+            adapter = FakeConnectionAdapter(payload_by_feed={"daily": SAMPLE_XML})
+        return run_automation(request, database=db, adapter=adapter)
+
+    def _find_child(self, db, child_id: str):
+        """Return the finalized child row matching the given child_id."""
+        for f in db.finalized_children:
+            if f.automation_job_account_id == child_id:
+                return f
+        return None
+
+    def test_missing_connection_assignment_fails_child_and_continues(self) -> None:
+        """Account with connection_id=None is finalized as failed; account with connection
+        is still executed and fetched."""
+        db = FakeAutomationDatabase()
+        db.portfolio_id_by_name["All Accounts"] = "portfolio-uuid"
+        db.connection_targets = [
+            _make_connection_target("account-1", "U100", connection_id="connection-1"),
+            _make_connection_target("account-2", "U200", connection_id=None),
+        ]
+        adapter = FakeConnectionAdapter(payload_by_feed={"daily": SAMPLE_XML})
+
+        result = self._run(_make_portfolio_run_request(), db=db, adapter=adapter)
+
+        self.assertEqual(result.status, "partially_succeeded")
+        # Child-2 (account-2) must be finalized with missing_integration_connection
+        child_2 = self._find_child(db, "child-2")
+        self.assertIsNotNone(child_2)
+        self.assertEqual(child_2.summary["error_category"], "missing_integration_connection")
+        self.assertEqual(child_2.status, "failed")
+        # Account-1 must still have been fetched
+        self.assertIn("account-1", adapter.fetched_account_ids)
+
+    def test_missing_connection_child_is_not_fetched(self) -> None:
+        """Account with connection_id=None must never be passed to adapter.fetch_payload."""
+        db = FakeAutomationDatabase()
+        db.connection_targets = [
+            _make_connection_target("account-1", "U100", connection_id="connection-1"),
+            _make_connection_target("account-2", "U200", connection_id=None),
+        ]
+        adapter = FakeConnectionAdapter(payload_by_feed={"daily": SAMPLE_XML})
+
+        self._run(_make_accounts_run_request(account_external_ids=("U100", "U200")), db=db, adapter=adapter)
+
+        self.assertNotIn("account-2", adapter.fetched_account_ids)
+
+    def test_child_row_snapshots_connection_id(self) -> None:
+        """add_automation_job_account must be called with connection_id from the resolved target."""
+        db = FakeAutomationDatabase()
+        db.connection_targets = [
+            _make_connection_target("account-1", "U100", connection_id="connection-abc"),
+        ]
+        adapter = FakeConnectionAdapter(payload_by_feed={"daily": SAMPLE_XML})
+
+        self._run(_make_accounts_run_request(account_external_ids=("U100",)), db=db, adapter=adapter)
+
+        self.assertEqual(len(db.added_accounts), 1)
+        _child_id, child_req = db.added_accounts[0]
+        self.assertEqual(child_req.connection_id, "connection-abc")
+
+    def test_null_connection_child_row_snapshots_none(self) -> None:
+        """add_automation_job_account for a missing-connection account must pass connection_id=None."""
+        db = FakeAutomationDatabase()
+        db.connection_targets = [
+            _make_connection_target("account-1", "U100", connection_id=None),
+        ]
+
+        self._run(_make_accounts_run_request(account_external_ids=("U100",)), db=db)
+
+        self.assertEqual(len(db.added_accounts), 1)
+        _child_id, child_req = db.added_accounts[0]
+        self.assertIsNone(child_req.connection_id)
+
+    def test_all_missing_connections_fails_parent(self) -> None:
+        """When every resolved target has connection_id=None, parent must be finalized as failed."""
+        db = FakeAutomationDatabase()
+        db.connection_targets = [
+            _make_connection_target("account-1", "U100", connection_id=None),
+            _make_connection_target("account-2", "U200", connection_id=None),
+        ]
+        adapter = FakeConnectionAdapter(payload_by_feed={"daily": SAMPLE_XML})
+
+        result = self._run(
+            _make_accounts_run_request(account_external_ids=("U100", "U200")),
+            db=db, adapter=adapter,
+        )
+
+        self.assertEqual(result.status, "failed")
+        self.assertEqual(len(db.finalized_jobs), 1)
+        self.assertEqual(db.finalized_jobs[0].status, "failed")
+
+    def test_all_missing_connections_no_fetch_attempted(self) -> None:
+        """When all targets lack connection_id, adapter.fetch_payload must never be called."""
+        db = FakeAutomationDatabase()
+        db.connection_targets = [
+            _make_connection_target("account-1", "U100", connection_id=None),
+        ]
+        adapter = FakeConnectionAdapter(payload_by_feed={"daily": SAMPLE_XML})
+
+        self._run(_make_accounts_run_request(account_external_ids=("U100",)), db=db, adapter=adapter)
+
+        self.assertEqual(len(adapter.fetched_account_ids), 0)
+
+    def test_missing_connection_child_error_category_in_summary(self) -> None:
+        """Finalized missing-connection child summary must have error_category='missing_integration_connection'."""
+        db = FakeAutomationDatabase()
+        db.connection_targets = [
+            _make_connection_target("account-1", "U100", connection_id=None),
+        ]
+
+        self._run(_make_accounts_run_request(account_external_ids=("U100",)), db=db)
+
+        child_1 = self._find_child(db, "child-1")
+        self.assertIsNotNone(child_1)
+        self.assertIn("error_category", child_1.summary)
+        self.assertEqual(child_1.summary["error_category"], "missing_integration_connection")
+
+    def test_assigned_and_missing_accounts_both_get_child_rows(self) -> None:
+        """Both assigned and missing-connection targets must have child rows inserted."""
+        db = FakeAutomationDatabase()
+        db.connection_targets = [
+            _make_connection_target("account-1", "U100", connection_id="connection-1"),
+            _make_connection_target("account-2", "U200", connection_id=None),
+        ]
+
+        self._run(_make_accounts_run_request(account_external_ids=("U100", "U200")), db=db)
+
+        self.assertEqual(len(db.added_accounts), 2)
+        added_account_ids = {req.account_id for _, req in db.added_accounts}
+        self.assertIn("account-1", added_account_ids)
+        self.assertIn("account-2", added_account_ids)
+
+    def test_resolve_automation_targets_with_connections_called_for_accounts(self) -> None:
+        """Orchestrator must call resolve_automation_targets_with_connections for accounts target."""
+        db = FakeAutomationDatabase()
+        db.connection_targets = [
+            _make_connection_target("account-1", "U100", connection_id="connection-1"),
+        ]
+
+        self._run(_make_accounts_run_request(account_external_ids=("U100",)), db=db)
+
+        self.assertEqual(len(db.connection_resolve_calls), 1)
+        call = db.connection_resolve_calls[0]
+        self.assertEqual(call["brokerage_code"], "IBKR")
+        self.assertIn("U100", call["account_external_ids"])
+
+    def test_resolve_automation_targets_with_connections_called_for_portfolio(self) -> None:
+        """Orchestrator must call resolve_automation_targets_with_connections for portfolio target."""
+        db = FakeAutomationDatabase()
+        db.portfolio_id_by_name["All Accounts"] = "portfolio-uuid"
+        db.connection_targets = [
+            _make_connection_target("account-1", "U100", connection_id="connection-1"),
+        ]
+
+        self._run(_make_portfolio_run_request(), db=db)
+
+        self.assertEqual(len(db.connection_resolve_calls), 1)
+        call = db.connection_resolve_calls[0]
+        self.assertEqual(call["target_type"], "portfolio")
+        self.assertEqual(call["portfolio_name"], "All Accounts")
+
+    def test_partially_succeeded_with_mixed_connections(self) -> None:
+        """One assigned (succeeds) + one missing → parent partially_succeeded, both children finalized."""
+        db = FakeAutomationDatabase()
+        db.connection_targets = [
+            _make_connection_target("account-1", "U100", connection_id="connection-1"),
+            _make_connection_target("account-2", "U200", connection_id=None),
+        ]
+        adapter = FakeConnectionAdapter(payload_by_feed={"daily": SAMPLE_XML})
+
+        result = self._run(
+            _make_accounts_run_request(account_external_ids=("U100", "U200")),
+            db=db, adapter=adapter,
+        )
+
+        self.assertEqual(result.status, "partially_succeeded")
+        self.assertEqual(len(db.finalized_children), 2)
+        child_statuses = {f.automation_job_account_id: f.status for f in db.finalized_children}
+        self.assertEqual(child_statuses["child-1"], "succeeded")
+        self.assertEqual(child_statuses["child-2"], "failed")
 
 
 if __name__ == "__main__":
