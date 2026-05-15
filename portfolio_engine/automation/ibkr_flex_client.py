@@ -80,8 +80,8 @@ class IbkrFlexWebServiceClient:
                 headers={"User-Agent": IBKR_FLEX_USER_AGENT},
                 timeout=HTTP_TIMEOUT_SECONDS,
             )
-        except Exception as error:
-            raise BrokerFetchError("ibkr_fetch_failed", "ibkr_fetch_failed") from error
+        except Exception:
+            raise BrokerFetchError("ibkr_fetch_failed", "ibkr_fetch_failed") from None
         return _reference_code_from_send_response(response)
 
     def _get_statement(self, *, token: str, reference_code: str) -> str:
@@ -99,10 +99,10 @@ class IbkrFlexWebServiceClient:
                 if error.category != "ibkr_report_not_ready":
                     raise
                 last_error = error
-            except Exception as error:
+            except Exception:
                 last_error = BrokerFetchError("ibkr_fetch_failed", "ibkr_fetch_failed")
                 if attempt == GETSTATEMENT_TOTAL_ATTEMPTS - 1:
-                    raise last_error from error
+                    raise last_error from None
 
             if attempt < GETSTATEMENT_TOTAL_ATTEMPTS - 1:
                 self._sleep(GETSTATEMENT_RETRY_WAIT_SECONDS)

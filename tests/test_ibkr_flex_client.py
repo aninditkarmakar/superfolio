@@ -145,6 +145,42 @@ class IbkrFlexClientRequestTests(unittest.TestCase):
         self.assertEqual(len(transport.calls), 1)
         self.assertNotIn("secret-token", str(ctx.exception))
         self.assertNotIn("secret-query", str(ctx.exception))
+        self.assertIsNone(ctx.exception.__cause__)
+
+    def test_getstatement_network_failure_is_retried_then_succeeds(self) -> None:
+        transport = FakeTransport(
+            [
+                FakeHttpResponse(200, """<FlexStatementResponse><Status>Success</Status><ReferenceCode>ref-secret</ReferenceCode></FlexStatementResponse>"""),
+                OSError("reference=ref-secret token=token-secret"),
+                FakeHttpResponse(200, VALID_FLEX_XML),
+            ]
+        )
+        sleeps: list[float] = []
+        client = IbkrFlexWebServiceClient(transport=transport, sleep=sleeps.append)
+
+        result = client.fetch_report(token="token-secret", query_id="query-secret")
+
+        self.assertEqual(result, VALID_FLEX_XML)
+        get_calls = [c for c in transport.calls if str(c["url"]).endswith("/GetStatement")]
+        self.assertEqual(len(get_calls), 2)
+        self.assertEqual(sleeps, [20.0, 20.0])
+
+    def test_getstatement_final_network_failure_has_no_cause(self) -> None:
+        """All GetStatement attempts fail with network errors; raised BrokerFetchError must not chain the OSError."""
+        transport = FakeTransport(
+            [
+                FakeHttpResponse(200, """<FlexStatementResponse><Status>Success</Status><ReferenceCode>ref-secret</ReferenceCode></FlexStatementResponse>"""),
+            ] + [OSError("reference=ref-secret token=token-secret") for _ in range(5)]
+        )
+        client = IbkrFlexWebServiceClient(transport=transport, sleep=lambda seconds: None)
+
+        with self.assertRaises(BrokerFetchError) as ctx:
+            client.fetch_report(token="token-secret", query_id="query-secret")
+
+        self.assertEqual(ctx.exception.category, "ibkr_fetch_failed")
+        self.assertIsNone(ctx.exception.__cause__)
+        self.assertNotIn("ref-secret", str(ctx.exception))
+        self.assertNotIn("token-secret", str(ctx.exception))
 
     def test_known_error_codes_map_to_categories(self) -> None:
         cases = {
