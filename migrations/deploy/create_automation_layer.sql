@@ -233,7 +233,8 @@ $$;
 
 CREATE FUNCTION public.add_automation_job_account(
     p_automation_job_id UUID,
-    p_account_id UUID
+    p_account_id UUID,
+    p_connection_id UUID DEFAULT NULL
 )
 RETURNS UUID
 LANGUAGE plpgsql
@@ -244,11 +245,13 @@ BEGIN
     INSERT INTO public.automation_job_accounts (
         automation_job_id,
         account_id,
+        connection_id,
         status
     )
     VALUES (
         p_automation_job_id,
         p_account_id,
+        p_connection_id,
         'pending'
     )
     RETURNING id INTO v_job_account_id;

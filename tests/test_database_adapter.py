@@ -959,8 +959,22 @@ class AutomationDatabaseAdapterTests(unittest.TestCase):
         self.assertEqual(job_account_id, "job-account-uuid")
         self.assertEqual(connection.commit_count, 1)
         sql, params = connection.cursor_instance.executed[0]
-        self.assertEqual(sql, "SELECT public.add_automation_job_account(%s, %s)")
-        self.assertEqual(params, ("job-uuid", "account-uuid"))
+        self.assertEqual(sql, "SELECT public.add_automation_job_account(%s, %s, %s)")
+        self.assertEqual(params, ("job-uuid", "account-uuid", None))
+
+    def test_add_automation_job_account_accepts_connection_snapshot(self) -> None:
+        connection = FakeConnection(row=("child-uuid",))
+        db = SuperFolioDatabase(connection)
+
+        db.add_automation_job_account(
+            AutomationJobAccountAdd(
+                automation_job_id="job-uuid",
+                account_id="account-uuid",
+                connection_id="connection-uuid",
+            )
+        )
+
+        self.assertEqual(connection.statements[0][1], ("job-uuid", "account-uuid", "connection-uuid"))
 
     def test_mark_automation_job_account_running_calls_database_function(self) -> None:
         connection = FakeConnection(("job-account-uuid",))

@@ -91,6 +91,7 @@ class AutomationJobFinalize:
 class AutomationJobAccountAdd:
     automation_job_id: str
     account_id: str
+    connection_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -252,8 +253,8 @@ class SuperFolioDatabase:
 
     def add_automation_job_account(self, request: AutomationJobAccountAdd) -> str:
         row = self._fetch_one(
-            "SELECT public.add_automation_job_account(%s, %s)",
-            (request.automation_job_id, request.account_id),
+            "SELECT public.add_automation_job_account(%s, %s, %s)",
+            (request.automation_job_id, request.account_id, request.connection_id),
         )
         return str(row[0])
 

@@ -52,7 +52,7 @@ FROM (
     VALUES
         (to_regprocedure('public.create_automation_job(text,text,uuid,text,text,date,date)')),
         (to_regprocedure('public.finalize_automation_job(uuid,text,jsonb,text)')),
-        (to_regprocedure('public.add_automation_job_account(uuid,uuid)')),
+        (to_regprocedure('public.add_automation_job_account(uuid,uuid,uuid)')),
         (to_regprocedure('public.mark_automation_job_account_running(uuid)')),
         (to_regprocedure('public.finalize_automation_job_account(uuid,text,uuid,jsonb,text)'))
 ) AS functions(signature)
