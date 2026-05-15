@@ -841,4 +841,40 @@ BEGIN
 END;
 $$;
 
+-- Task 11: active credential and feed query functions
+
+CREATE FUNCTION public.list_active_connection_credentials(p_connection_id UUID)
+RETURNS TABLE (
+    credential_name TEXT,
+    ciphertext BYTEA
+)
+LANGUAGE sql
+AS $$
+    SELECT credential_name::TEXT, ciphertext
+    FROM public.integration_connection_credentials
+    WHERE connection_id = p_connection_id
+      AND is_active = true
+    ORDER BY credential_name;
+$$;
+
+CREATE FUNCTION public.list_active_integration_feeds(p_connection_id UUID)
+RETURNS TABLE (
+    id UUID,
+    connection_id UUID,
+    feed_key TEXT,
+    display_name TEXT,
+    is_active BOOLEAN,
+    created_at TIMESTAMPTZ,
+    updated_at TIMESTAMPTZ
+)
+LANGUAGE sql
+AS $$
+    SELECT id, connection_id, feed_key::TEXT, display_name::TEXT,
+           is_active, created_at, updated_at
+    FROM public.integration_feeds
+    WHERE connection_id = p_connection_id
+      AND is_active = true
+    ORDER BY feed_key;
+$$;
+
 COMMIT;

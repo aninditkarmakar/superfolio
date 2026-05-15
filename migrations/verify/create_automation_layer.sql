@@ -93,3 +93,11 @@ FROM (
         (to_regprocedure('public.resolve_automation_targets_with_connections(text,text,text,text[])'))
 ) AS functions(signature)
 WHERE signature IS NOT NULL;
+
+SELECT 1 / (count(*) = 2)::int
+FROM (
+    VALUES
+        (to_regprocedure('public.list_active_connection_credentials(uuid)')),
+        (to_regprocedure('public.list_active_integration_feeds(uuid)'))
+) AS functions(signature)
+WHERE signature IS NOT NULL;

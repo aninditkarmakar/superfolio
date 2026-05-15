@@ -425,6 +425,20 @@ class SuperFolioDatabase:
         )
         return [_integration_feed_record_from_row(row) for row in rows]
 
+    def list_active_connection_credentials(self, connection_id: str) -> dict[str, bytes]:
+        rows = self._fetch_all(
+            "SELECT credential_name, ciphertext FROM public.list_active_connection_credentials(%s)",
+            (connection_id,),
+        )
+        return {str(row[0]): bytes(row[1]) for row in rows}
+
+    def list_active_integration_feeds(self, connection_id: str) -> list[IntegrationFeedRecord]:
+        rows = self._fetch_all(
+            "SELECT * FROM public.list_active_integration_feeds(%s)",
+            (connection_id,),
+        )
+        return [_integration_feed_record_from_row(row) for row in rows]
+
     def bulk_ingest_cash_flows(
         self, ingestion_run_id: str, records: list[dict[str, Any]]
     ) -> BulkIngestionSummary:

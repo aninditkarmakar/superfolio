@@ -207,6 +207,11 @@ class FakeAutomationDatabase:
         # Connection-aware target resolution (Task 10)
         self.connection_targets: list | None = None
         self.connection_resolve_calls: list = []
+        # Connection credential and feed loading (Task 11)
+        self.connection_credentials: dict[str, dict[str, bytes]] = {}
+        self.connection_feeds: dict[str, list] = {}
+        self.credential_calls: list[str] = []
+        self.feed_calls: list[str] = []
 
     def fail_stale_automation_runs(self, *, stale_before, error_message) -> int:
         self._event_log.append("fail_stale")
@@ -348,6 +353,14 @@ class FakeAutomationDatabase:
             "exclude_automation_job_id": exclude_automation_job_id,
         })
         return self.overlapping_load
+
+    def list_active_connection_credentials(self, connection_id: str) -> dict[str, bytes]:
+        self.credential_calls.append(connection_id)
+        return dict(self.connection_credentials.get(connection_id, {}))
+
+    def list_active_integration_feeds(self, connection_id: str) -> list:
+        self.feed_calls.append(connection_id)
+        return list(self.connection_feeds.get(connection_id, []))
 
 
 class FakeAdapter:
@@ -3140,12 +3153,19 @@ def _make_accounts_run_request(**kwargs):
 class FakeConnectionAdapter:
     """Adapter that tracks which account IDs were fetched and returns canned XML."""
 
-    def __init__(self, *, payload_by_feed=None):
+    def __init__(self, *, payload_by_feed=None, preflight_connection_error=None):
         self.payload_by_feed = payload_by_feed or {}
         self.fetched_account_ids: list[str] = []
+        self.preflight_connection_calls: list = []
+        self._preflight_connection_error = preflight_connection_error
 
     def preflight_validate_config(self, config) -> None:
         return None
+
+    def preflight_connection(self, connection, feeds) -> None:
+        self.preflight_connection_calls.append((connection, feeds))
+        if self._preflight_connection_error is not None:
+            raise self._preflight_connection_error
 
     def fetch_payload(self, account, request, config):
         from portfolio_engine.automation.types import BrokerPayload
@@ -3161,7 +3181,25 @@ class ConnectionAssignmentOrchestratorTests(unittest.TestCase):
         from portfolio_engine.automation.orchestrator import run_automation
         if adapter is None:
             adapter = FakeConnectionAdapter(payload_by_feed={"daily": SAMPLE_XML})
-        return run_automation(request, database=db, adapter=adapter)
+        # Populate default credentials for all connection IDs in connection_targets
+        # so credential loading does not interfere with Task 10 connection-assignment tests.
+        if db.connection_targets:
+            connection_ids = {
+                t.connection_id
+                for t in db.connection_targets
+                if t.connection_id is not None
+            }
+            for cid in connection_ids:
+                if cid not in db.connection_credentials:
+                    from cryptography.fernet import Fernet
+                    f = Fernet(_TEST_MASTER_KEY.encode())
+                    db.connection_credentials[cid] = {
+                        "flex_token": f.encrypt(b"test-token"),
+                    }
+                if cid not in db.connection_feeds:
+                    db.connection_feeds[cid] = []
+        with mock.patch.dict(os.environ, {"SUPERFOLIO_CREDENTIAL_MASTER_KEY": _TEST_MASTER_KEY}):
+            return run_automation(request, database=db, adapter=adapter)
 
     def _find_child(self, db, child_id: str):
         """Return the finalized child row matching the given child_id."""
@@ -3339,6 +3377,302 @@ class ConnectionAssignmentOrchestratorTests(unittest.TestCase):
         child_statuses = {f.automation_job_account_id: f.status for f in db.finalized_children}
         self.assertEqual(child_statuses["child-1"], "succeeded")
         self.assertEqual(child_statuses["child-2"], "failed")
+
+
+# ---------------------------------------------------------------------------
+# Task 11: Credential loading, decryption, and per-connection error isolation
+# ---------------------------------------------------------------------------
+
+_TEST_MASTER_KEY = "NdCDktJuoy2s0j5XScl4bvkXDcXMrUvpMzixhCY0_uc="
+
+
+def _encrypt_value(plaintext: str) -> bytes:
+    """Encrypt a plaintext string with the test master key."""
+    from cryptography.fernet import Fernet
+    return Fernet(_TEST_MASTER_KEY.encode()).encrypt(plaintext.encode())
+
+
+def _make_feed_record(feed_key: str, *, feed_id: str | None = None, display_name: str | None = None):
+    """Create a fake IntegrationFeedRecord for tests."""
+    from portfolio_engine.database import IntegrationFeedRecord
+    from datetime import timezone
+    from datetime import datetime
+    now = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    return IntegrationFeedRecord(
+        id=feed_id or f"feed-{feed_key}",
+        connection_id="connection-x",
+        feed_key=feed_key,
+        display_name=display_name,
+        is_active=True,
+        created_at=now,
+        updated_at=now,
+    )
+
+
+class CredentialLoadingOrchestratorTests(unittest.TestCase):
+    """Tests for Task 11: per-connection credential loading and decryption."""
+
+    def _run(self, request, db, adapter=None, master_key=_TEST_MASTER_KEY):
+        from portfolio_engine.automation.orchestrator import run_automation
+        if adapter is None:
+            adapter = FakeConnectionAdapter(payload_by_feed={"daily": SAMPLE_XML})
+        with mock.patch.dict(os.environ, {"SUPERFOLIO_CREDENTIAL_MASTER_KEY": master_key}):
+            return run_automation(request, database=db, adapter=adapter)
+
+    def _find_child(self, db, child_id: str):
+        for f in db.finalized_children:
+            if f.automation_job_account_id == child_id:
+                return f
+        return None
+
+    def _make_db_with_two_connections(self):
+        db = FakeAutomationDatabase()
+        db.connection_targets = [
+            _make_connection_target("account-1", "U100", connection_id="connection-1"),
+            _make_connection_target("account-2", "U200", connection_id="connection-2"),
+        ]
+        # Both connections with valid credentials and feeds
+        db.connection_credentials["connection-1"] = {
+            "flex_token": _encrypt_value("token1"),
+            "feed:daily:query_id": _encrypt_value("query1"),
+        }
+        db.connection_feeds["connection-1"] = [_make_feed_record("daily")]
+        db.connection_credentials["connection-2"] = {
+            "flex_token": _encrypt_value("token2"),
+            "feed:daily:query_id": _encrypt_value("query2"),
+        }
+        db.connection_feeds["connection-2"] = [_make_feed_record("daily")]
+        return db
+
+    def test_credentials_loaded_and_decrypted_for_connection(self) -> None:
+        """When valid credentials exist, orchestrator decrypts them and calls preflight_connection."""
+        db = self._make_db_with_two_connections()
+        adapter = FakeConnectionAdapter(payload_by_feed={"daily": SAMPLE_XML})
+
+        result = self._run(
+            _make_accounts_run_request(account_external_ids=("U100", "U200")),
+            db=db, adapter=adapter,
+        )
+
+        self.assertEqual(result.status, "succeeded")
+        # preflight_connection must have been called once per connection
+        self.assertEqual(len(adapter.preflight_connection_calls), 2)
+
+    def test_missing_flex_token_fails_only_that_connection(self) -> None:
+        """Missing flex_token credential fails only children in that connection group."""
+        db = FakeAutomationDatabase()
+        db.connection_targets = [
+            _make_connection_target("account-1", "U100", connection_id="connection-1"),
+            _make_connection_target("account-2", "U200", connection_id="connection-2"),
+        ]
+        # connection-1 has no flex_token
+        db.connection_credentials["connection-1"] = {}
+        db.connection_feeds["connection-1"] = [_make_feed_record("daily")]
+        # connection-2 has valid credentials
+        db.connection_credentials["connection-2"] = {
+            "flex_token": _encrypt_value("token2"),
+            "feed:daily:query_id": _encrypt_value("query2"),
+        }
+        db.connection_feeds["connection-2"] = [_make_feed_record("daily")]
+        adapter = FakeConnectionAdapter(payload_by_feed={"daily": SAMPLE_XML})
+
+        result = self._run(
+            _make_accounts_run_request(account_external_ids=("U100", "U200")),
+            db=db, adapter=adapter,
+        )
+
+        self.assertEqual(result.status, "partially_succeeded")
+        child_1 = self._find_child(db, "child-1")
+        self.assertIsNotNone(child_1)
+        self.assertEqual(child_1.status, "failed")
+        self.assertEqual(child_1.summary["error_category"], "missing_connection_credential")
+        child_2 = self._find_child(db, "child-2")
+        self.assertIsNotNone(child_2)
+        self.assertEqual(child_2.status, "succeeded")
+
+    def test_missing_feed_query_id_fails_only_that_connection(self) -> None:
+        """Missing feed query_id credential fails only children of that connection."""
+        db = FakeAutomationDatabase()
+        db.connection_targets = [
+            _make_connection_target("account-1", "U100", connection_id="connection-1"),
+            _make_connection_target("account-2", "U200", connection_id="connection-2"),
+        ]
+        # connection-1 has token but no feed query_id
+        db.connection_credentials["connection-1"] = {
+            "flex_token": _encrypt_value("token1"),
+        }
+        db.connection_feeds["connection-1"] = [_make_feed_record("daily")]
+        # connection-2 has everything valid
+        db.connection_credentials["connection-2"] = {
+            "flex_token": _encrypt_value("token2"),
+            "feed:daily:query_id": _encrypt_value("query2"),
+        }
+        db.connection_feeds["connection-2"] = [_make_feed_record("daily")]
+        adapter = FakeConnectionAdapter(payload_by_feed={"daily": SAMPLE_XML})
+
+        result = self._run(
+            _make_accounts_run_request(account_external_ids=("U100", "U200")),
+            db=db, adapter=adapter,
+        )
+
+        self.assertEqual(result.status, "partially_succeeded")
+        child_1 = self._find_child(db, "child-1")
+        self.assertEqual(child_1.status, "failed")
+        self.assertEqual(child_1.summary["error_category"], "missing_feed_secret")
+        child_2 = self._find_child(db, "child-2")
+        self.assertEqual(child_2.status, "succeeded")
+
+    def test_tampered_ciphertext_fails_only_that_connection(self) -> None:
+        """Bad ciphertext for a connection credential fails only that connection's children."""
+        db = FakeAutomationDatabase()
+        db.connection_targets = [
+            _make_connection_target("account-1", "U100", connection_id="connection-1"),
+            _make_connection_target("account-2", "U200", connection_id="connection-2"),
+        ]
+        # connection-1 has tampered (invalid) ciphertext
+        db.connection_credentials["connection-1"] = {
+            "flex_token": b"tampered-garbage-bytes",
+        }
+        db.connection_feeds["connection-1"] = [_make_feed_record("daily")]
+        # connection-2 is fine
+        db.connection_credentials["connection-2"] = {
+            "flex_token": _encrypt_value("token2"),
+            "feed:daily:query_id": _encrypt_value("query2"),
+        }
+        db.connection_feeds["connection-2"] = [_make_feed_record("daily")]
+        adapter = FakeConnectionAdapter(payload_by_feed={"daily": SAMPLE_XML})
+
+        result = self._run(
+            _make_accounts_run_request(account_external_ids=("U100", "U200")),
+            db=db, adapter=adapter,
+        )
+
+        self.assertEqual(result.status, "partially_succeeded")
+        child_1 = self._find_child(db, "child-1")
+        self.assertEqual(child_1.status, "failed")
+        self.assertEqual(child_1.summary["error_category"], "credential_decryption_failed")
+        child_2 = self._find_child(db, "child-2")
+        self.assertEqual(child_2.status, "succeeded")
+
+    def test_adapter_preflight_connection_called_with_connection_context(self) -> None:
+        """Orchestrator passes IntegrationConnectionContext with decrypted credentials."""
+        from portfolio_engine.automation.types import IntegrationConnectionContext
+        db = FakeAutomationDatabase()
+        db.connection_targets = [
+            _make_connection_target(
+                "account-1", "U100", connection_id="connection-1",
+                connection_name="My IBKR Login",
+            ),
+        ]
+        db.connection_credentials["connection-1"] = {
+            "flex_token": _encrypt_value("mytoken"),
+            "feed:daily:query_id": _encrypt_value("myquery"),
+        }
+        db.connection_feeds["connection-1"] = [_make_feed_record("daily")]
+        adapter = FakeConnectionAdapter(payload_by_feed={"daily": SAMPLE_XML})
+
+        self._run(
+            _make_accounts_run_request(account_external_ids=("U100",)),
+            db=db, adapter=adapter,
+        )
+
+        self.assertEqual(len(adapter.preflight_connection_calls), 1)
+        connection_ctx, feeds = adapter.preflight_connection_calls[0]
+        self.assertIsInstance(connection_ctx, IntegrationConnectionContext)
+        self.assertEqual(connection_ctx.connection_id, "connection-1")
+        self.assertIn("flex_token", connection_ctx.credentials)
+        self.assertEqual(connection_ctx.credentials["flex_token"].reveal(), "mytoken")
+
+    def test_adapter_preflight_connection_called_with_feed_contexts(self) -> None:
+        """Orchestrator passes IntegrationFeedContext with decrypted query_id secret."""
+        from portfolio_engine.automation.types import IntegrationFeedContext
+        db = FakeAutomationDatabase()
+        db.connection_targets = [
+            _make_connection_target("account-1", "U100", connection_id="connection-1"),
+        ]
+        db.connection_credentials["connection-1"] = {
+            "flex_token": _encrypt_value("mytoken"),
+            "feed:daily:query_id": _encrypt_value("myquery"),
+        }
+        db.connection_feeds["connection-1"] = [_make_feed_record("daily", feed_id="feed-uuid-1")]
+        adapter = FakeConnectionAdapter(payload_by_feed={"daily": SAMPLE_XML})
+
+        self._run(
+            _make_accounts_run_request(account_external_ids=("U100",)),
+            db=db, adapter=adapter,
+        )
+
+        _, feeds = adapter.preflight_connection_calls[0]
+        self.assertEqual(len(feeds), 1)
+        self.assertIsInstance(feeds[0], IntegrationFeedContext)
+        self.assertEqual(feeds[0].feed_key, "daily")
+        self.assertEqual(feeds[0].secrets["query_id"].reveal(), "myquery")
+
+    def test_preflight_connection_error_fails_only_that_connection(self) -> None:
+        """RuntimeError from preflight_connection fails only that connection group."""
+        db = FakeAutomationDatabase()
+        db.connection_targets = [
+            _make_connection_target("account-1", "U100", connection_id="connection-1"),
+            _make_connection_target("account-2", "U200", connection_id="connection-2"),
+        ]
+        # Both valid credentials
+        for cid in ("connection-1", "connection-2"):
+            db.connection_credentials[cid] = {
+                "flex_token": _encrypt_value("token"),
+                "feed:daily:query_id": _encrypt_value("query"),
+            }
+            db.connection_feeds[cid] = [_make_feed_record("daily")]
+
+        call_count = {"n": 0}
+
+        class SelectiveFailAdapter(FakeConnectionAdapter):
+            def preflight_connection(self, connection, feeds):
+                call_count["n"] += 1
+                if connection.connection_id == "connection-1":
+                    raise RuntimeError("connection_preflight_failed: bad config")
+
+        adapter = SelectiveFailAdapter(payload_by_feed={"daily": SAMPLE_XML})
+
+        result = self._run(
+            _make_accounts_run_request(account_external_ids=("U100", "U200")),
+            db=db, adapter=adapter,
+        )
+
+        self.assertEqual(result.status, "partially_succeeded")
+        child_1 = self._find_child(db, "child-1")
+        self.assertEqual(child_1.status, "failed")
+        child_2 = self._find_child(db, "child-2")
+        self.assertEqual(child_2.status, "succeeded")
+
+    def test_credentials_loaded_per_connection_not_globally(self) -> None:
+        """DB credential loading is called once per unique connection_id."""
+        db = self._make_db_with_two_connections()
+        adapter = FakeConnectionAdapter(payload_by_feed={"daily": SAMPLE_XML})
+
+        self._run(
+            _make_accounts_run_request(account_external_ids=("U100", "U200")),
+            db=db, adapter=adapter,
+        )
+
+        self.assertIn("connection-1", db.credential_calls)
+        self.assertIn("connection-2", db.credential_calls)
+
+    def test_all_connections_fail_results_in_parent_failed(self) -> None:
+        """If every connection group fails with missing_connection_credential, parent is failed."""
+        db = FakeAutomationDatabase()
+        db.connection_targets = [
+            _make_connection_target("account-1", "U100", connection_id="connection-1"),
+        ]
+        # No credentials at all
+        db.connection_credentials["connection-1"] = {}
+        db.connection_feeds["connection-1"] = [_make_feed_record("daily")]
+
+        result = self._run(
+            _make_accounts_run_request(account_external_ids=("U100",)),
+            db=db,
+        )
+
+        self.assertEqual(result.status, "failed")
 
 
 if __name__ == "__main__":

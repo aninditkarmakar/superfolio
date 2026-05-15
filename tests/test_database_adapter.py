@@ -1479,5 +1479,103 @@ class AutomationConnectionTargetResolutionTests(unittest.TestCase):
             target.connection_id = "other"  # type: ignore[misc]
 
 
+class ActiveConnectionCredentialsTests(unittest.TestCase):
+    """Tests for SuperFolioDatabase.list_active_connection_credentials (Task 11)."""
+
+    def test_list_active_connection_credentials_maps_rows(self) -> None:
+        connection = FakeConnection(rows=[
+            ("flex_token", b"\xde\xad\xbe\xef"),
+            ("feed:cash:query_id", b"\xca\xfe\xba\xbe"),
+        ])
+        db = SuperFolioDatabase(connection)
+
+        result = db.list_active_connection_credentials("conn-uuid")
+
+        self.assertEqual(result, {
+            "flex_token": b"\xde\xad\xbe\xef",
+            "feed:cash:query_id": b"\xca\xfe\xba\xbe",
+        })
+
+    def test_list_active_connection_credentials_calls_db_function(self) -> None:
+        connection = FakeConnection(rows=[])
+        db = SuperFolioDatabase(connection)
+
+        db.list_active_connection_credentials("conn-uuid")
+
+        sql, params = connection.statements[0]
+        self.assertIn("public.list_active_connection_credentials", sql)
+        self.assertEqual(params, ("conn-uuid",))
+
+    def test_list_active_connection_credentials_returns_empty_dict(self) -> None:
+        connection = FakeConnection(rows=[])
+        db = SuperFolioDatabase(connection)
+
+        result = db.list_active_connection_credentials("conn-uuid")
+
+        self.assertEqual(result, {})
+
+    def test_list_active_connection_credentials_bytes_values(self) -> None:
+        connection = FakeConnection(rows=[
+            ("flex_token", b"some-ciphertext"),
+        ])
+        db = SuperFolioDatabase(connection)
+
+        result = db.list_active_connection_credentials("conn-uuid")
+
+        self.assertIsInstance(result["flex_token"], bytes)
+
+
+class ActiveIntegrationFeedsTests(unittest.TestCase):
+    """Tests for SuperFolioDatabase.list_active_integration_feeds (Task 11)."""
+
+    def test_list_active_integration_feeds_maps_rows(self) -> None:
+        from datetime import timezone
+        now = datetime(2026, 5, 1, 12, 0, tzinfo=timezone.utc)
+        connection = FakeConnection(rows=[
+            ("feed-uuid", "conn-uuid", "cash_flows", "Cash Flows", True, now, now),
+        ])
+        db = SuperFolioDatabase(connection)
+
+        results = db.list_active_integration_feeds("conn-uuid")
+
+        self.assertEqual(len(results), 1)
+        self.assertIsInstance(results[0], IntegrationFeedRecord)
+        self.assertEqual(results[0].id, "feed-uuid")
+        self.assertEqual(results[0].connection_id, "conn-uuid")
+        self.assertEqual(results[0].feed_key, "cash_flows")
+        self.assertEqual(results[0].display_name, "Cash Flows")
+        self.assertTrue(results[0].is_active)
+
+    def test_list_active_integration_feeds_calls_db_function(self) -> None:
+        connection = FakeConnection(rows=[])
+        db = SuperFolioDatabase(connection)
+
+        db.list_active_integration_feeds("conn-uuid")
+
+        sql, params = connection.statements[0]
+        self.assertIn("public.list_active_integration_feeds", sql)
+        self.assertEqual(params, ("conn-uuid",))
+
+    def test_list_active_integration_feeds_returns_empty_list(self) -> None:
+        connection = FakeConnection(rows=[])
+        db = SuperFolioDatabase(connection)
+
+        result = db.list_active_integration_feeds("conn-uuid")
+
+        self.assertEqual(result, [])
+
+    def test_list_active_integration_feeds_allows_null_display_name(self) -> None:
+        from datetime import timezone
+        now = datetime(2026, 5, 1, 12, 0, tzinfo=timezone.utc)
+        connection = FakeConnection(rows=[
+            ("feed-uuid", "conn-uuid", "daily", None, True, now, now),
+        ])
+        db = SuperFolioDatabase(connection)
+
+        results = db.list_active_integration_feeds("conn-uuid")
+
+        self.assertIsNone(results[0].display_name)
+
+
 if __name__ == "__main__":
     unittest.main()

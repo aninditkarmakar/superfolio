@@ -2,6 +2,8 @@
 
 BEGIN;
 
+DROP FUNCTION IF EXISTS public.list_active_integration_feeds(UUID);
+DROP FUNCTION IF EXISTS public.list_active_connection_credentials(UUID);
 DROP FUNCTION IF EXISTS public.resolve_automation_targets_with_connections(TEXT, TEXT, TEXT, TEXT[]);
 DROP FUNCTION IF EXISTS public.list_integration_feeds(UUID);
 DROP FUNCTION IF EXISTS public.list_integration_connections();

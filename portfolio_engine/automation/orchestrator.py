@@ -1,17 +1,31 @@
 """Automation orchestrator: validates requests, persists job lifecycle, coordinates runs."""
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from portfolio_engine.automation.adapters import get_adapter
 from portfolio_engine.automation.config import load_integration_config
+from portfolio_engine.automation.credentials import (
+    CredentialDecryptionError,
+    CredentialMasterKeyError,
+    SecretValue,
+    decrypt_secret,
+    load_master_key,
+)
 from portfolio_engine.automation.ingestion import dry_run_payload, load_payload
 from portfolio_engine.automation.sanitization import sanitize_error_message
 from portfolio_engine.automation.summary import build_child_summary, build_parent_summary
 from portfolio_engine.automation.targets import AutomationValidationError, validate_target_inputs
-from portfolio_engine.automation.types import AutomationRunRequest, VALID_MODES, VALID_TARGET_TYPES
+from portfolio_engine.automation.types import (
+    AutomationRunRequest,
+    IntegrationConnectionContext,
+    IntegrationFeedContext,
+    VALID_MODES,
+    VALID_TARGET_TYPES,
+)
 from portfolio_engine.database import (
     AutomationJobAccountAdd,
     AutomationJobAccountFinalize,
@@ -152,7 +166,7 @@ def run_automation(request: AutomationRunRequest, *, database, adapter=None) -> 
 
     child_ids = [cid for cid, _ in child_pairs]
 
-    # Group assigned accounts by connection_id for Task 11 (credential loading per connection).
+    # Group assigned accounts by connection_id for credential loading per connection.
     connection_groups: dict[str, list[tuple[str, Any]]] = {}
     for child_id, account in assigned_pairs:
         cid = account.connection_id  # guaranteed non-None for assigned_pairs
@@ -198,11 +212,108 @@ def run_automation(request: AutomationRunRequest, *, database, adapter=None) -> 
             automation_job_account_ids=tuple(child_ids),
         )
 
+    # Load master key from environment for credential decryption.
+    raw_master_key = os.environ.get("SUPERFOLIO_CREDENTIAL_MASTER_KEY")
+
     child_statuses: list[str] = []
     child_summaries: list[dict[str, Any]] = []
 
+    # Pairs that passed credential/preflight checks, eligible for fetch.
+    fetch_pairs: list[tuple[str, Any]] = []
+    # Pairs whose connection group failed credential/preflight checks.
+    connection_failed_statuses: list[str] = []
+    connection_failed_summaries: list[dict[str, Any]] = []
+
+    # If the adapter implements preflight_connection, load credentials per connection group
+    # before running fetches. Adapters that do not implement it use the legacy flow.
+    adapter_supports_connection_preflight = (
+        hasattr(adapter, "preflight_connection")
+        and callable(getattr(adapter, "preflight_connection"))
+    )
+
+    if adapter_supports_connection_preflight:
+        for connection_id, group_pairs in connection_groups.items():
+            connection_name = getattr(group_pairs[0][1], "connection_name", None) or connection_id
+
+            try:
+                master_key = load_master_key(raw_master_key)
+                raw_creds = database.list_active_connection_credentials(connection_id)
+                decrypted_creds: dict[str, SecretValue] = {
+                    name: decrypt_secret(ciphertext, master_key)
+                    for name, ciphertext in raw_creds.items()
+                }
+            except (CredentialMasterKeyError, CredentialDecryptionError):
+                _fail_group(
+                    group_pairs, "credential_decryption_failed",
+                    database, connection_failed_statuses, connection_failed_summaries,
+                )
+                continue
+
+            if "flex_token" not in decrypted_creds:
+                _fail_group(
+                    group_pairs, "missing_connection_credential",
+                    database, connection_failed_statuses, connection_failed_summaries,
+                )
+                continue
+
+            feed_records = database.list_active_integration_feeds(connection_id)
+            feed_contexts: list[IntegrationFeedContext] = []
+            feed_build_error: str | None = None
+            for feed_record in feed_records:
+                feed_cred_name = f"feed:{feed_record.feed_key}:query_id"
+                if feed_cred_name not in decrypted_creds:
+                    feed_build_error = "missing_feed_secret"
+                    break
+                feed_contexts.append(
+                    IntegrationFeedContext(
+                        feed_id=feed_record.id,
+                        feed_key=feed_record.feed_key,
+                        display_name=feed_record.display_name,
+                        secrets={"query_id": decrypted_creds[feed_cred_name]},
+                    )
+                )
+
+            if feed_build_error is not None:
+                _fail_group(
+                    group_pairs, feed_build_error,
+                    database, connection_failed_statuses, connection_failed_summaries,
+                )
+                continue
+
+            connection_context = IntegrationConnectionContext(
+                connection_id=connection_id,
+                integration_key=config.integration_key,
+                brokerage_code=config.brokerage_code,
+                name=connection_name,
+                credentials=decrypted_creds,
+            )
+
+            try:
+                adapter.preflight_connection(connection_context, tuple(feed_contexts))
+            except RuntimeError as exc:
+                error_msg = sanitize_error_message(str(exc))
+                failed_summary = build_child_summary(error_category="connection_preflight_failed")
+                for child_id, _ in group_pairs:
+                    database.finalize_automation_job_account(
+                        AutomationJobAccountFinalize(
+                            automation_job_account_id=child_id,
+                            status="failed",
+                            ingestion_run_id=None,
+                            summary=failed_summary,
+                            error_message=error_msg,
+                        )
+                    )
+                    connection_failed_statuses.append("failed")
+                    connection_failed_summaries.append(failed_summary)
+                continue
+
+            for pair in group_pairs:
+                fetch_pairs.append(pair)
+    else:
+        fetch_pairs = list(assigned_pairs)
+
     if request.mode == "dry-run":
-        for child_id, account in assigned_pairs:
+        for child_id, account in fetch_pairs:
             database.mark_automation_job_account_running(child_id)
             try:
                 payload = adapter.fetch_payload(account, request, config)
@@ -239,7 +350,7 @@ def run_automation(request: AutomationRunRequest, *, database, adapter=None) -> 
             child_statuses.append("succeeded")
             child_summaries.append(child_summary)
     else:
-        for child_id, account in assigned_pairs:
+        for child_id, account in fetch_pairs:
             database.mark_automation_job_account_running(child_id)
             try:
                 if request.mode == "load" and database.has_overlapping_automation_load(
@@ -290,8 +401,8 @@ def run_automation(request: AutomationRunRequest, *, database, adapter=None) -> 
             child_statuses.append(child_status)
             child_summaries.append(child_summary)
 
-    all_statuses = early_failed_statuses + child_statuses
-    all_summaries = early_failed_summaries + child_summaries
+    all_statuses = early_failed_statuses + connection_failed_statuses + child_statuses
+    all_summaries = early_failed_summaries + connection_failed_summaries + child_summaries
     parent_status = _derive_parent_status(all_statuses)
     parent_summary = build_parent_summary(all_statuses, all_summaries)
     database.finalize_automation_job(
@@ -308,6 +419,30 @@ def run_automation(request: AutomationRunRequest, *, database, adapter=None) -> 
         summary=parent_summary,
         automation_job_account_ids=tuple(child_ids),
     )
+
+
+def _fail_group(
+    group_pairs: list[tuple[str, Any]],
+    error_category: str,
+    database: Any,
+    failed_statuses: list[str],
+    failed_summaries: list[dict[str, Any]],
+) -> None:
+    """Finalize all children in a connection group as failed with the given error_category."""
+    error_msg = sanitize_error_message(error_category)
+    failed_summary = build_child_summary(error_category=error_category)
+    for child_id, _ in group_pairs:
+        database.finalize_automation_job_account(
+            AutomationJobAccountFinalize(
+                automation_job_account_id=child_id,
+                status="failed",
+                ingestion_run_id=None,
+                summary=failed_summary,
+                error_message=error_msg,
+            )
+        )
+        failed_statuses.append("failed")
+        failed_summaries.append(failed_summary)
 
 
 def _resolve_accounts(request: AutomationRunRequest, config, database) -> list:
