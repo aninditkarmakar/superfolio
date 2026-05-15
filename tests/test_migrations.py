@@ -397,10 +397,26 @@ class AutomationConnectionMigrationTests(unittest.TestCase):
     def test_revert_drops_connection_tables(self) -> None:
         text = Path("migrations/revert/create_automation_layer.sql").read_text(encoding="utf-8")
 
-        self.assertIn("DROP TABLE public.account_integration_assignments", text)
-        self.assertIn("DROP TABLE public.integration_connection_credentials", text)
-        self.assertIn("DROP TABLE public.integration_feeds", text)
-        self.assertIn("DROP TABLE public.integration_connections", text)
+        self.assertIn("DROP TABLE IF EXISTS public.account_integration_assignments", text)
+        self.assertIn("DROP TABLE IF EXISTS public.integration_connection_credentials", text)
+        self.assertIn("DROP TABLE IF EXISTS public.integration_feeds", text)
+        self.assertIn("DROP TABLE IF EXISTS public.integration_connections", text)
+
+    def test_revert_drops_automation_job_accounts_before_integration_connections(self) -> None:
+        text = Path("migrations/revert/create_automation_layer.sql").read_text(encoding="utf-8")
+
+        child_pos = text.index("DROP TABLE IF EXISTS public.automation_job_accounts")
+        parent_pos = text.index("DROP TABLE IF EXISTS public.integration_connections")
+        self.assertLess(child_pos, parent_pos)
+
+    def test_deploy_creates_connection_id_index_on_assignments(self) -> None:
+        text = Path("migrations/deploy/create_automation_layer.sql").read_text(encoding="utf-8")
+
+        self.assertIn("account_integration_assignments_connection_id_idx", text)
+        self.assertIn(
+            "ON public.account_integration_assignments (connection_id)",
+            text,
+        )
 
     def test_verify_checks_connection_tables(self) -> None:
         text = Path("migrations/verify/create_automation_layer.sql").read_text(encoding="utf-8")

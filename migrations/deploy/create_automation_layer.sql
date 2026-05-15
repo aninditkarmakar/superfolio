@@ -55,6 +55,9 @@ CREATE TABLE public.account_integration_assignments (
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+CREATE INDEX account_integration_assignments_connection_id_idx
+    ON public.account_integration_assignments (connection_id);
+
 CREATE TABLE public.automation_jobs (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     trigger_type VARCHAR(30) NOT NULL,

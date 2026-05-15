@@ -16,9 +16,9 @@ DROP FUNCTION IF EXISTS public.create_automation_job(TEXT, TEXT, UUID, TEXT, TEX
 DROP TABLE IF EXISTS public.automation_job_accounts;
 DROP TABLE IF EXISTS public.automation_jobs;
 
-DROP TABLE public.account_integration_assignments;
-DROP TABLE public.integration_connection_credentials;
-DROP TABLE public.integration_feeds;
-DROP TABLE public.integration_connections;
+DROP TABLE IF EXISTS public.account_integration_assignments;
+DROP TABLE IF EXISTS public.integration_connection_credentials;
+DROP TABLE IF EXISTS public.integration_feeds;
+DROP TABLE IF EXISTS public.integration_connections;
 
 COMMIT;
