@@ -3036,6 +3036,14 @@ class AdapterContextTests(unittest.TestCase):
         src = inspect.getsource(BrokerAdapter.fetch_feed_payload)
         self.assertIn("...", src, "fetch_feed_payload protocol body must use ellipsis")
 
+    def test_broker_adapter_protocol_preflight_connection_body_is_ellipsis(self) -> None:
+        """Protocol method body must be ... (not a docstring-only stub that returns None)."""
+        import inspect
+        from portfolio_engine.automation.types import BrokerAdapter
+
+        src = inspect.getsource(BrokerAdapter.preflight_connection)
+        self.assertIn("...", src, "preflight_connection protocol body must use ellipsis")
+
 
 if __name__ == "__main__":
     unittest.main()

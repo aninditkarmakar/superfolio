@@ -87,6 +87,7 @@ class BrokerAdapter(Protocol):
         feeds: tuple[IntegrationFeedContext, ...],
     ) -> None:
         """Validate decrypted connection and feed credential shape before fetch."""
+        ...
 
     def fetch_feed_payload(
         self,
