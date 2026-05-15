@@ -42,6 +42,7 @@ from dataclasses import dataclass
 from portfolio_engine.automation.ibkr_flex_client import (
     IBKR_FLEX_BASE_URL,
     IBKR_FLEX_USER_AGENT,
+    HttpxTransport,
     IbkrFlexWebServiceClient,
 )
 
@@ -101,6 +102,91 @@ class IbkrFlexClientRequestTests(unittest.TestCase):
         self.assertEqual(transport.calls[1]["params"], {"t": "token-123", "q": "1234567890", "v": "3"})
         self.assertEqual(transport.calls[1]["headers"], {"User-Agent": IBKR_FLEX_USER_AGENT})
         self.assertEqual(sleeps, [20.0])
+
+
+class FakeHttpxClient:
+    """Minimal fake for httpx.Client that tracks whether close() was called."""
+
+    def __init__(self) -> None:
+        self.closed = False
+
+    def get(self, url: str, **kwargs: object) -> FakeHttpResponse:
+        return FakeHttpResponse(200, "")
+
+    def close(self) -> None:
+        self.closed = True
+
+
+class CloseableTransport:
+    """A fake transport that exposes close() — simulates a real closeable transport."""
+
+    def __init__(self) -> None:
+        self.closed = False
+
+    def get(self, url: str, *, params: dict[str, str], headers: dict[str, str], timeout: float) -> FakeHttpResponse:
+        return FakeHttpResponse(200, "")
+
+    def close(self) -> None:
+        self.closed = True
+
+
+class HttpxTransportLifecycleTests(unittest.TestCase):
+    def test_close_closes_underlying_client(self) -> None:
+        fake_client = FakeHttpxClient()
+        transport = HttpxTransport(client=fake_client)  # type: ignore[arg-type]
+
+        transport.close()
+
+        self.assertTrue(fake_client.closed)
+
+    def test_context_manager_closes_client_on_exit(self) -> None:
+        fake_client = FakeHttpxClient()
+        transport = HttpxTransport(client=fake_client)  # type: ignore[arg-type]
+
+        with transport:
+            self.assertFalse(fake_client.closed)
+
+        self.assertTrue(fake_client.closed)
+
+    def test_context_manager_returns_self(self) -> None:
+        fake_client = FakeHttpxClient()
+        transport = HttpxTransport(client=fake_client)  # type: ignore[arg-type]
+
+        with transport as ctx:
+            self.assertIs(ctx, transport)
+
+
+class IbkrFlexClientLifecycleTests(unittest.TestCase):
+    def test_close_calls_transport_close_when_available(self) -> None:
+        transport = CloseableTransport()
+        client = IbkrFlexWebServiceClient(transport=transport)
+
+        client.close()
+
+        self.assertTrue(transport.closed)
+
+    def test_close_does_not_raise_when_transport_has_no_close(self) -> None:
+        transport = FakeTransport([])  # FakeTransport has no close()
+        client = IbkrFlexWebServiceClient(transport=transport)
+
+        # Must not raise even though transport lacks close()
+        client.close()
+
+    def test_context_manager_closes_transport_on_exit(self) -> None:
+        transport = CloseableTransport()
+        client = IbkrFlexWebServiceClient(transport=transport)
+
+        with client:
+            self.assertFalse(transport.closed)
+
+        self.assertTrue(transport.closed)
+
+    def test_context_manager_returns_self(self) -> None:
+        transport = CloseableTransport()
+        client = IbkrFlexWebServiceClient(transport=transport)
+
+        with client as ctx:
+            self.assertIs(ctx, client)
 
 
 if __name__ == "__main__":

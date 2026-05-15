@@ -36,6 +36,15 @@ class HttpxTransport:
     def get(self, url: str, *, params: dict[str, str], headers: dict[str, str], timeout: float) -> httpx.Response:
         return self._client.get(url, params=params, headers=headers, timeout=timeout)
 
+    def close(self) -> None:
+        self._client.close()
+
+    def __enter__(self) -> HttpxTransport:
+        return self
+
+    def __exit__(self, *args: object) -> None:
+        self.close()
+
 
 class IbkrFlexWebServiceClient:
     def __init__(
@@ -46,6 +55,17 @@ class IbkrFlexWebServiceClient:
     ) -> None:
         self._transport = transport or HttpxTransport()
         self._sleep = sleep
+
+    def close(self) -> None:
+        close = getattr(self._transport, "close", None)
+        if callable(close):
+            close()
+
+    def __enter__(self) -> IbkrFlexWebServiceClient:
+        return self
+
+    def __exit__(self, *args: object) -> None:
+        self.close()
 
     def fetch_report(self, *, token: str, query_id: str) -> str:
         reference_code = self._send_request(token=token, query_id=query_id)
