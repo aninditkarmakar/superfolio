@@ -2848,5 +2848,130 @@ class PreflightFailureChildFinalizationTests(unittest.TestCase):
 
         self.assertIn("child-1", result.automation_job_account_ids)
 
+class AdapterContextTests(unittest.TestCase):
+    def test_secret_value_is_redacted_in_adapter_context(self) -> None:
+        from portfolio_engine.automation.types import IntegrationConnectionContext
+        from portfolio_engine.automation.credentials import SecretValue
+
+        secret = SecretValue("plain")
+        context = IntegrationConnectionContext(
+            connection_id="connection-uuid",
+            integration_key="ibkr_flex_ws",
+            brokerage_code="IBKR",
+            name="IBKR Personal",
+            credentials={"flex_token": secret},
+        )
+
+        self.assertEqual(str(context.credentials["flex_token"]), "<redacted>")
+        self.assertEqual(context.credentials["flex_token"].reveal(), "plain")
+
+    def test_ibkr_adapter_preflight_requires_token_and_feed_query_ids(self) -> None:
+        from portfolio_engine.automation.adapters import IbkrFlexWebServiceAdapter
+        from portfolio_engine.automation.types import IntegrationConnectionContext, IntegrationFeedContext
+
+        adapter = IbkrFlexWebServiceAdapter()
+        connection = IntegrationConnectionContext(
+            connection_id="connection-uuid",
+            integration_key="ibkr_flex_ws",
+            brokerage_code="IBKR",
+            name="IBKR Personal",
+            credentials={},
+        )
+        feed = IntegrationFeedContext(
+            feed_id="feed-uuid",
+            feed_key="daily",
+            display_name="Daily",
+            secrets={},
+        )
+
+        with self.assertRaisesRegex(RuntimeError, "missing_connection_credential"):
+            adapter.preflight_connection(connection, (feed,))
+
+    def test_ibkr_adapter_preflight_passes_when_token_and_query_id_present(self) -> None:
+        from portfolio_engine.automation.adapters import IbkrFlexWebServiceAdapter
+        from portfolio_engine.automation.types import IntegrationConnectionContext, IntegrationFeedContext
+        from portfolio_engine.automation.credentials import SecretValue
+
+        adapter = IbkrFlexWebServiceAdapter()
+        connection = IntegrationConnectionContext(
+            connection_id="connection-uuid",
+            integration_key="ibkr_flex_ws",
+            brokerage_code="IBKR",
+            name="IBKR Personal",
+            credentials={"flex_token": SecretValue("tok123")},
+        )
+        feed = IntegrationFeedContext(
+            feed_id="feed-uuid",
+            feed_key="daily",
+            display_name="Daily",
+            secrets={"query_id": SecretValue("987654")},
+        )
+
+        # Should not raise
+        adapter.preflight_connection(connection, (feed,))
+
+    def test_ibkr_adapter_preflight_missing_feed_query_id_raises_missing_feed_secret(self) -> None:
+        from portfolio_engine.automation.adapters import IbkrFlexWebServiceAdapter
+        from portfolio_engine.automation.types import IntegrationConnectionContext, IntegrationFeedContext
+        from portfolio_engine.automation.credentials import SecretValue
+
+        adapter = IbkrFlexWebServiceAdapter()
+        connection = IntegrationConnectionContext(
+            connection_id="connection-uuid",
+            integration_key="ibkr_flex_ws",
+            brokerage_code="IBKR",
+            name="IBKR Personal",
+            credentials={"flex_token": SecretValue("tok123")},
+        )
+        feed = IntegrationFeedContext(
+            feed_id="feed-uuid",
+            feed_key="daily",
+            display_name="Daily",
+            secrets={},
+        )
+
+        with self.assertRaisesRegex(RuntimeError, "missing_feed_secret"):
+            adapter.preflight_connection(connection, (feed,))
+
+    def test_ibkr_adapter_fetch_feed_payload_raises_not_implemented_without_secret_leak(self) -> None:
+        from portfolio_engine.automation.adapters import IbkrFlexWebServiceAdapter
+        from portfolio_engine.automation.types import (
+            AutomationRunRequest,
+            IntegrationConnectionContext,
+            IntegrationFeedContext,
+        )
+        from portfolio_engine.automation.credentials import SecretValue
+        from datetime import date
+
+        adapter = IbkrFlexWebServiceAdapter()
+        connection = IntegrationConnectionContext(
+            connection_id="connection-uuid",
+            integration_key="ibkr_flex_ws",
+            brokerage_code="IBKR",
+            name="IBKR Personal",
+            credentials={"flex_token": SecretValue("supersecrettoken")},
+        )
+        feed = IntegrationFeedContext(
+            feed_id="feed-uuid",
+            feed_key="daily",
+            display_name="Daily",
+            secrets={"query_id": SecretValue("myprivatequery")},
+        )
+        request = AutomationRunRequest(
+            target_type="portfolio",
+            integration_key="ibkr_flex_ws",
+            mode="dry-run",
+            requested_start_date=date(2024, 1, 1),
+            requested_end_date=date(2024, 1, 31),
+        )
+
+        with self.assertRaises(NotImplementedError) as ctx:
+            adapter.fetch_feed_payload(connection, feed, request)
+
+        error_msg = str(ctx.exception)
+        self.assertNotIn("supersecrettoken", error_msg)
+        self.assertNotIn("myprivatequery", error_msg)
+
+
 if __name__ == "__main__":
     unittest.main()

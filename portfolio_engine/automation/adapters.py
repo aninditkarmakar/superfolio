@@ -10,7 +10,14 @@ from __future__ import annotations
 import os
 
 from portfolio_engine.database import AutomationAccountTarget
-from portfolio_engine.automation.types import AutomationRunRequest, BrokerAdapter, BrokerPayload, IntegrationConfig
+from portfolio_engine.automation.types import (
+    AutomationRunRequest,
+    BrokerAdapter,
+    BrokerPayload,
+    IntegrationConfig,
+    IntegrationConnectionContext,
+    IntegrationFeedContext,
+)
 
 
 class IbkrFlexWebServiceAdapter:
@@ -41,6 +48,37 @@ class IbkrFlexWebServiceAdapter:
 
         Full IBKR Flex Web Service fetch internals are out of scope for this
         phase and require a follow-up design.
+        """
+        raise NotImplementedError(
+            "IBKR Flex Web Service fetch internals require the follow-up IBKR fetch design"
+        )
+
+    def preflight_connection(
+        self,
+        connection: IntegrationConnectionContext,
+        feeds: tuple[IntegrationFeedContext, ...],
+    ) -> None:
+        """Validate connection credentials and each feed's secrets.
+
+        Raises RuntimeError containing 'missing_connection_credential' if flex_token
+        is absent from connection.credentials. Raises RuntimeError containing
+        'missing_feed_secret' if query_id is absent from any feed's secrets.
+        """
+        if "flex_token" not in connection.credentials:
+            raise RuntimeError("missing_connection_credential: flex_token")
+        for feed in feeds:
+            if "query_id" not in feed.secrets:
+                raise RuntimeError(f"missing_feed_secret: {feed.feed_key}: query_id")
+
+    def fetch_feed_payload(
+        self,
+        connection: IntegrationConnectionContext,
+        feed: IntegrationFeedContext,
+        request: AutomationRunRequest,
+    ) -> BrokerPayload:
+        """Fetch one broker payload for one connection feed.
+
+        Full IBKR Flex Web Service fetch internals are out of scope for this phase.
         """
         raise NotImplementedError(
             "IBKR Flex Web Service fetch internals require the follow-up IBKR fetch design"

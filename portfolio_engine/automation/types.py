@@ -5,6 +5,7 @@ from datetime import date
 from typing import Protocol
 
 from portfolio_engine.database import AutomationAccountTarget
+from portfolio_engine.automation.credentials import SecretValue
 
 
 VALID_TARGET_TYPES = frozenset({"portfolio", "accounts"})
@@ -40,6 +41,23 @@ class BrokerPayload:
     source_name: str | None = None
 
 
+@dataclass(frozen=True)
+class IntegrationConnectionContext:
+    connection_id: str
+    integration_key: str
+    brokerage_code: str
+    name: str
+    credentials: dict[str, SecretValue]
+
+
+@dataclass(frozen=True)
+class IntegrationFeedContext:
+    feed_id: str
+    feed_key: str
+    display_name: str | None
+    secrets: dict[str, SecretValue]
+
+
 class BrokerAdapter(Protocol):
     def preflight_validate_config(self, config: IntegrationConfig) -> None: ...
     def fetch_payload(
@@ -48,6 +66,20 @@ class BrokerAdapter(Protocol):
         request: AutomationRunRequest,
         config: IntegrationConfig,
     ) -> BrokerPayload: ...
+    def preflight_connection(
+        self,
+        connection: IntegrationConnectionContext,
+        feeds: tuple[IntegrationFeedContext, ...],
+    ) -> None:
+        """Validate decrypted connection and feed credential shape before fetch."""
+
+    def fetch_feed_payload(
+        self,
+        connection: IntegrationConnectionContext,
+        feed: IntegrationFeedContext,
+        request: AutomationRunRequest,
+    ) -> BrokerPayload:
+        """Fetch one broker payload for one connection feed."""
 
 
 @dataclass(frozen=True)
