@@ -532,6 +532,14 @@ class IntegrationConnectionFunctionTests(unittest.TestCase):
         self.assertIn("p_portfolio_name TEXT", sql)
         self.assertIn("RETURNS TABLE (account_external_id TEXT)", sql)
 
+    def test_deploy_validate_assignments_guards_null_portfolio_name(self) -> None:
+        sql = self.DEPLOY.read_text(encoding="utf-8")
+
+        self.assertIn(
+            "validate_account_integration_assignments requires portfolio_name when target_type is portfolio",
+            sql,
+        )
+
     def test_deploy_defines_list_integration_connections(self) -> None:
         sql = self.DEPLOY.read_text(encoding="utf-8")
 

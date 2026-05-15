@@ -646,6 +646,9 @@ BEGIN
     END IF;
 
     IF lower(btrim(p_target_type)) = 'portfolio' THEN
+        IF btrim(coalesce(p_portfolio_name, '')) = '' THEN
+            RAISE EXCEPTION 'validate_account_integration_assignments requires portfolio_name when target_type is portfolio';
+        END IF;
         RETURN QUERY
         SELECT a.external_id::TEXT
         FROM public.portfolio_accounts pa
