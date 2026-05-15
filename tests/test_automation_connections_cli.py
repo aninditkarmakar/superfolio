@@ -307,18 +307,48 @@ class ConnectionCliTests(unittest.TestCase):
         self.assertEqual(code, 1)
         self.assertIn("U99999", stderr.getvalue())
 
-    def test_assign_portfolio_calls_validate(self) -> None:
-        calls = []
+    def test_assign_portfolio_requires_connection_id(self) -> None:
+        """assign-portfolio must reject invocations that omit --connection-id."""
+        class FakeDatabase:
+            def list_portfolio_account_external_ids(self, *, portfolio_name, brokerage_code):
+                return ["U11111"]
+
+            def set_account_integration_assignment(self, request):
+                return "assignment-id"
+
+        stderr = StringIO()
+        code = run(
+            [
+                "assign-portfolio",
+                "--portfolio-name", "MyPortfolio",
+                "--brokerage-code", "IBKR",
+            ],
+            stdout=StringIO(),
+            stderr=stderr,
+            database_connector=lambda: FakeDatabase(),
+            environ={},
+        )
+
+        self.assertEqual(code, 1)
+
+    def test_assign_portfolio_writes_assignments_for_portfolio_accounts(self) -> None:
+        """assign-portfolio should look up portfolio accounts and write an assignment for each."""
+        db_calls = []
 
         class FakeDatabase:
-            def validate_account_integration_assignments(self, *, target_type, portfolio_name, brokerage_code, account_external_ids):
-                calls.append((target_type, portfolio_name, brokerage_code, account_external_ids))
-                return []
+            def list_portfolio_account_external_ids(self, *, portfolio_name, brokerage_code):
+                db_calls.append(("list", portfolio_name, brokerage_code))
+                return ["U11111", "U22222"]
+
+            def set_account_integration_assignment(self, request):
+                db_calls.append(("assign", request.connection_id, request.brokerage_code, request.account_external_id))
+                return "assignment-id"
 
         stdout = StringIO()
         code = run(
             [
                 "assign-portfolio",
+                "--connection-id", "conn-id",
                 "--portfolio-name", "MyPortfolio",
                 "--brokerage-code", "IBKR",
             ],
@@ -328,9 +358,51 @@ class ConnectionCliTests(unittest.TestCase):
         )
 
         self.assertEqual(code, 0)
-        self.assertEqual(calls[0][0], "portfolio")
-        self.assertEqual(calls[0][1], "MyPortfolio")
-        self.assertEqual(calls[0][2], "IBKR")
+        list_calls = [c for c in db_calls if c[0] == "list"]
+        assign_calls = [c for c in db_calls if c[0] == "assign"]
+        self.assertEqual(len(list_calls), 1)
+        self.assertEqual(list_calls[0][1], "MyPortfolio")
+        self.assertEqual(list_calls[0][2], "IBKR")
+        self.assertEqual(len(assign_calls), 2)
+        assigned_ids = {c[3] for c in assign_calls}
+        self.assertIn("U11111", assigned_ids)
+        self.assertIn("U22222", assigned_ids)
+        for c in assign_calls:
+            self.assertEqual(c[1], "conn-id")
+            self.assertEqual(c[2], "IBKR")
+
+    def test_assign_portfolio_partial_failure_identifies_account(self) -> None:
+        """When a mid-loop assignment fails, stderr identifies the account and exit code is 1."""
+        assigned = []
+
+        class FakeDatabase:
+            def list_portfolio_account_external_ids(self, *, portfolio_name, brokerage_code):
+                return ["U11111", "U22222"]
+
+            def set_account_integration_assignment(self, request):
+                if request.account_external_id == "U22222":
+                    raise RuntimeError("db error")
+                assigned.append(request.account_external_id)
+                return "assignment-id"
+
+        stderr = StringIO()
+        code = run(
+            [
+                "assign-portfolio",
+                "--connection-id", "conn-id",
+                "--portfolio-name", "MyPortfolio",
+                "--brokerage-code", "IBKR",
+            ],
+            stdout=StringIO(),
+            stderr=stderr,
+            database_connector=lambda: FakeDatabase(),
+            environ={},
+        )
+
+        self.assertEqual(code, 1)
+        self.assertIn("U11111", assigned)
+        self.assertIn("U22222", stderr.getvalue())
+        self.assertNotIn("db error", stderr.getvalue())
 
     def test_list_connections_calls_database(self) -> None:
         from datetime import datetime, timezone
@@ -513,6 +585,9 @@ class ConnectionCliTests(unittest.TestCase):
         self.assertIn("U22222", stderr.getvalue())
         # Stderr does not contain raw exception message
         self.assertNotIn("db error", stderr.getvalue())
+
+    def test_create_connection_sanitizes_db_errors(self) -> None:
+        """create must not expose raw DB error details (e.g. connection strings) in stderr."""
         class FakeDatabase:
             def create_integration_connection(self, request):
                 raise RuntimeError("connection string: postgresql://user:secret@host/db")

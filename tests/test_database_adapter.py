@@ -700,7 +700,30 @@ class DatabaseAdapterTests(unittest.TestCase):
         self.assertNotIn("a.is_active = true", sql)
         self.assertEqual(params, ("All Accounts",))
 
-    def test_fetch_portfolio_nav_inputs_maps_currency_aware_rows(self) -> None:
+    def test_list_portfolio_account_external_ids_filters_by_brokerage(self) -> None:
+        connection = FakeConnection(
+            rows=[
+                ("U11111",),
+                ("U22222",),
+            ]
+        )
+        database = SuperFolioDatabase(connection)
+
+        external_ids = database.list_portfolio_account_external_ids(
+            portfolio_name="MyPortfolio",
+            brokerage_code="IBKR",
+        )
+
+        self.assertEqual(external_ids, ["U11111", "U22222"])
+        sql, params = connection.cursor_instance.executed[0]
+        self.assertIn("public.portfolio_accounts", sql)
+        self.assertIn("public.portfolios", sql)
+        self.assertIn("public.accounts", sql)
+        self.assertIn("public.brokerages", sql)
+        self.assertIn("b.code = %s", sql)
+        self.assertEqual(params, ("MyPortfolio", "IBKR"))
+
+
         start = date(2026, 1, 1)
         end = date(2026, 1, 31)
         connection = FakeConnection(

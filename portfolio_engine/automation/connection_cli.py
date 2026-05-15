@@ -249,6 +249,7 @@ def _cmd_assign_accounts(args: list[str], *, stdout: Any, stderr: Any, database_
 
 def _cmd_assign_portfolio(args: list[str], *, stdout: Any, stderr: Any, database_connector: Callable[[], Any]) -> int:
     parser = argparse.ArgumentParser(add_help=False)
+    parser.add_argument("--connection-id", required=True)
     parser.add_argument("--portfolio-name", required=True)
     parser.add_argument("--brokerage-code", required=True)
     ns = _parse_args(parser, args, stderr=stderr)
@@ -257,22 +258,28 @@ def _cmd_assign_portfolio(args: list[str], *, stdout: Any, stderr: Any, database
 
     try:
         db = database_connector()
-        missing = db.validate_account_integration_assignments(
-            target_type="portfolio",
+        account_external_ids = db.list_portfolio_account_external_ids(
             portfolio_name=ns.portfolio_name,
             brokerage_code=ns.brokerage_code,
-            account_external_ids=[],
         )
     except Exception:
         print(_SANITIZED_ERROR, file=stderr)
         return 1
 
-    if missing:
-        for account_id in missing:
-            print(f"missing assignment: {account_id}", file=stderr)
-        return 1
+    for external_id in account_external_ids:
+        request = AccountIntegrationAssignmentSet(
+            brokerage_code=ns.brokerage_code,
+            account_external_id=external_id,
+            connection_id=ns.connection_id,
+        )
+        try:
+            assignment_id = db.set_account_integration_assignment(request)
+            print(f"assigned account {external_id}: {assignment_id}", file=stdout)
+        except Exception:
+            print(f"error: failed to assign account {external_id!r}: {_SANITIZED_ERROR}", file=stderr)
+            return 1
 
-    print(f"portfolio assignments validated: {ns.portfolio_name}", file=stdout)
+    print(f"portfolio assigned: {ns.portfolio_name}", file=stdout)
     return 0
 
 

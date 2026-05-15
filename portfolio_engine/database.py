@@ -364,6 +364,24 @@ class SuperFolioDatabase:
         )
         return [str(row[0]) for row in rows]
 
+    def list_portfolio_account_external_ids(
+        self, *, portfolio_name: str, brokerage_code: str
+    ) -> list[str]:
+        """Return broker-scoped account external IDs for a portfolio."""
+        rows = self._fetch_all(
+            """
+            SELECT a.external_id
+            FROM public.portfolio_accounts pa
+            JOIN public.portfolios p ON p.id = pa.portfolio_id
+            JOIN public.accounts a ON a.id = pa.account_id
+            JOIN public.brokerages b ON b.id = a.brokerage_id
+            WHERE p.name = %s AND b.code = %s
+            ORDER BY a.external_id
+            """,
+            (portfolio_name, brokerage_code),
+        )
+        return [str(row[0]) for row in rows]
+
     def list_integration_connections(self) -> list[IntegrationConnectionRecord]:
         rows = self._fetch_all(
             "SELECT * FROM public.list_integration_connections()",
