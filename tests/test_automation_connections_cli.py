@@ -1,13 +1,56 @@
 from __future__ import annotations
 
+import subprocess
+import sys
 import unittest
 from io import StringIO
+from pathlib import Path
 from cryptography.fernet import Fernet
 
 from portfolio_engine.automation.connection_cli import run
+from portfolio_engine.database import DatabaseConfigurationError
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
 class ConnectionCliTests(unittest.TestCase):
+    def test_script_wrapper_runs_from_repo_root(self) -> None:
+        result = subprocess.run(
+            [sys.executable, "scripts/manage_integration_connections.py", "not-a-command"],
+            cwd=REPO_ROOT,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("unknown command", result.stderr)
+        self.assertNotIn("ModuleNotFoundError", result.stderr)
+
+    def test_script_create_reports_missing_database_url(self) -> None:
+        result = subprocess.run(
+            [
+                sys.executable,
+                "scripts/manage_integration_connections.py",
+                "create",
+                "--integration",
+                "ibkr_flex_ws",
+                "--brokerage-code",
+                "IBKR",
+                "--name",
+                "IBKR Personal",
+            ],
+            cwd=REPO_ROOT,
+            capture_output=True,
+            text=True,
+            check=False,
+            env={},
+        )
+
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("DATABASE_URL is required", result.stderr)
+        self.assertNotIn("cannot import name 'connect'", result.stderr)
+
     def test_create_connection_calls_database(self) -> None:
         calls = []
 
@@ -27,6 +70,21 @@ class ConnectionCliTests(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertEqual(calls[0].name, "IBKR Personal")
         self.assertIn("connection-uuid", stdout.getvalue())
+
+    def test_create_connection_reports_database_configuration_errors(self) -> None:
+        stderr = StringIO()
+        code = run(
+            ["create", "--integration", "ibkr_flex_ws", "--brokerage-code", "IBKR", "--name", "IBKR Personal"],
+            stderr=stderr,
+            database_connector=lambda: (_ for _ in ()).throw(
+                DatabaseConfigurationError("DATABASE_URL is required. Set DATABASE_URL or pass database_url.")
+            ),
+            environ={},
+        )
+
+        self.assertEqual(code, 1)
+        self.assertIn("DATABASE_URL is required", stderr.getvalue())
+        self.assertNotIn("a database error occurred", stderr.getvalue())
 
     def test_set_credential_encrypts_plaintext(self) -> None:
         captured = []

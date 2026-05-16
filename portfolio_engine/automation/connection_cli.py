@@ -13,6 +13,7 @@ from portfolio_engine.automation.credentials import (
 )
 from portfolio_engine.database import (
     AccountIntegrationAssignmentSet,
+    DatabaseConfigurationError,
     IntegrationConnectionCreate,
     IntegrationCredentialSet,
     IntegrationFeedCreate,
@@ -31,6 +32,13 @@ _KNOWN_COMMANDS = {
 }
 
 _SANITIZED_ERROR = "a database error occurred"
+
+
+def _print_database_error(exc: Exception, *, stderr: Any) -> None:
+    if isinstance(exc, DatabaseConfigurationError):
+        print(f"error: {exc}", file=stderr)
+        return
+    print(_SANITIZED_ERROR, file=stderr)
 
 
 def run(
@@ -76,8 +84,8 @@ def run(
             return _cmd_list_feeds(argv[1:], stdout=stdout, stderr=stderr, database_connector=database_connector)
     except SystemExit:
         raise
-    except Exception:
-        print(_SANITIZED_ERROR, file=stderr)
+    except Exception as exc:
+        _print_database_error(exc, stderr=stderr)
         return 1
 
     return 0  # unreachable but satisfies type checker
@@ -110,8 +118,8 @@ def _cmd_create(args: list[str], *, stdout: Any, stderr: Any, database_connector
     try:
         db = database_connector()
         connection_id = db.create_integration_connection(request)
-    except Exception:
-        print(_SANITIZED_ERROR, file=stderr)
+    except Exception as exc:
+        _print_database_error(exc, stderr=stderr)
         return 1
 
     print(f"created connection: {connection_id}", file=stdout)
@@ -158,8 +166,8 @@ def _cmd_set_credential(
     try:
         db = database_connector()
         credential_id = db.set_integration_credential(request)
-    except Exception:
-        print(_SANITIZED_ERROR, file=stderr)
+    except Exception as exc:
+        _print_database_error(exc, stderr=stderr)
         return 1
 
     print(f"set credential: {credential_id}", file=stdout)
@@ -183,8 +191,8 @@ def _cmd_add_feed(args: list[str], *, stdout: Any, stderr: Any, database_connect
     try:
         db = database_connector()
         feed_id = db.create_integration_feed(request)
-    except Exception:
-        print(_SANITIZED_ERROR, file=stderr)
+    except Exception as exc:
+        _print_database_error(exc, stderr=stderr)
         return 1
 
     print(f"created feed: {feed_id}", file=stdout)
@@ -208,8 +216,8 @@ def _cmd_assign_account(args: list[str], *, stdout: Any, stderr: Any, database_c
     try:
         db = database_connector()
         assignment_id = db.set_account_integration_assignment(request)
-    except Exception:
-        print(_SANITIZED_ERROR, file=stderr)
+    except Exception as exc:
+        _print_database_error(exc, stderr=stderr)
         return 1
 
     print(f"assigned account: {assignment_id}", file=stdout)
@@ -227,8 +235,8 @@ def _cmd_assign_accounts(args: list[str], *, stdout: Any, stderr: Any, database_
 
     try:
         db = database_connector()
-    except Exception:
-        print(_SANITIZED_ERROR, file=stderr)
+    except Exception as exc:
+        _print_database_error(exc, stderr=stderr)
         return 1
 
     for external_id in ns.account_external_ids:
@@ -240,8 +248,11 @@ def _cmd_assign_accounts(args: list[str], *, stdout: Any, stderr: Any, database_
         try:
             assignment_id = db.set_account_integration_assignment(request)
             print(f"assigned account {external_id}: {assignment_id}", file=stdout)
-        except Exception:
-            print(f"error: failed to assign account {external_id!r}: {_SANITIZED_ERROR}", file=stderr)
+        except Exception as exc:
+            if isinstance(exc, DatabaseConfigurationError):
+                print(f"error: failed to assign account {external_id!r}: {exc}", file=stderr)
+            else:
+                print(f"error: failed to assign account {external_id!r}: {_SANITIZED_ERROR}", file=stderr)
             return 1
 
     return 0
@@ -262,8 +273,8 @@ def _cmd_assign_portfolio(args: list[str], *, stdout: Any, stderr: Any, database
             portfolio_name=ns.portfolio_name,
             brokerage_code=ns.brokerage_code,
         )
-    except Exception:
-        print(_SANITIZED_ERROR, file=stderr)
+    except Exception as exc:
+        _print_database_error(exc, stderr=stderr)
         return 1
 
     if not account_external_ids:
@@ -282,8 +293,11 @@ def _cmd_assign_portfolio(args: list[str], *, stdout: Any, stderr: Any, database
         try:
             assignment_id = db.set_account_integration_assignment(request)
             print(f"assigned account {external_id}: {assignment_id}", file=stdout)
-        except Exception:
-            print(f"error: failed to assign account {external_id!r}: {_SANITIZED_ERROR}", file=stderr)
+        except Exception as exc:
+            if isinstance(exc, DatabaseConfigurationError):
+                print(f"error: failed to assign account {external_id!r}: {exc}", file=stderr)
+            else:
+                print(f"error: failed to assign account {external_id!r}: {_SANITIZED_ERROR}", file=stderr)
             return 1
 
     print(f"portfolio assigned: {ns.portfolio_name}", file=stdout)
@@ -316,8 +330,8 @@ def _cmd_validate_assignments(args: list[str], *, stdout: Any, stderr: Any, data
             brokerage_code=ns.brokerage_code,
             account_external_ids=ns.account_external_ids,
         )
-    except Exception:
-        print(_SANITIZED_ERROR, file=stderr)
+    except Exception as exc:
+        _print_database_error(exc, stderr=stderr)
         return 1
 
     if missing:
@@ -333,8 +347,8 @@ def _cmd_list_connections(args: list[str], *, stdout: Any, stderr: Any, database
     try:
         db = database_connector()
         connections = db.list_integration_connections()
-    except Exception:
-        print(_SANITIZED_ERROR, file=stderr)
+    except Exception as exc:
+        _print_database_error(exc, stderr=stderr)
         return 1
 
     for conn in connections:
@@ -356,8 +370,8 @@ def _cmd_list_feeds(args: list[str], *, stdout: Any, stderr: Any, database_conne
     try:
         db = database_connector()
         feeds = db.list_integration_feeds(ns.connection_id)
-    except Exception:
-        print(_SANITIZED_ERROR, file=stderr)
+    except Exception as exc:
+        _print_database_error(exc, stderr=stderr)
         return 1
 
     for feed in feeds:
@@ -372,9 +386,9 @@ def main(argv: list[str]) -> int:
     import os
 
     def _database_connector() -> Any:
-        from portfolio_engine.database import SuperFolioDatabase, connect
+        from portfolio_engine.database import connect_database
 
-        return SuperFolioDatabase(connect())
+        return connect_database()
 
     return run(
         argv,

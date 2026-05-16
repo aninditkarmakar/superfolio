@@ -1,11 +1,16 @@
 """Tests for the automation CLI entrypoint."""
 from __future__ import annotations
 
+import subprocess
+import sys
 import unittest
 from io import StringIO
+from pathlib import Path
 from unittest import mock
 
 from portfolio_engine.automation.cli import run
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
 def _result(status: str):
@@ -14,6 +19,19 @@ def _result(status: str):
 
 
 class AutomationCliTests(unittest.TestCase):
+    def test_script_wrapper_runs_from_repo_root(self) -> None:
+        result = subprocess.run(
+            [sys.executable, "scripts/run_automated_ingestion.py", "--help"],
+            cwd=REPO_ROOT,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("Run an automated broker data ingestion job", result.stdout)
+        self.assertNotIn("ModuleNotFoundError", result.stderr)
+
     def test_accounts_target_parses_and_runs(self) -> None:
         calls = []
 
