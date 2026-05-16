@@ -250,6 +250,47 @@ class AutomationCliTests(unittest.TestCase):
         self.assertEqual(exit_code, 0)
         self.assertEqual(calls[0].debug_raw_xml_dir, "scratch/debug-xml")
 
+    def test_debug_raw_xml_dir_empty_string_rejected_locally(self) -> None:
+        stderr = StringIO()
+        exit_code = run(
+            [
+                "--target-type", "accounts",
+                "--integration", "ibkr_flex_ws",
+                "--mode", "dry-run",
+                "--start-date", "2026-05-01",
+                "--end-date", "2026-05-14",
+                "--account-external-ids", "U100",
+                "--debug-raw-xml-dir", "",
+            ],
+            stderr=stderr,
+            runner=lambda request, database: _result("succeeded"),
+            database_connector=lambda: object(),
+        )
+
+        self.assertEqual(exit_code, 1)
+        self.assertIn("must not be empty", stderr.getvalue())
+
+    def test_debug_raw_xml_dir_empty_string_rejected_in_github_actions(self) -> None:
+        stderr = StringIO()
+        with mock.patch.dict("os.environ", {"GITHUB_ACTIONS": "true"}):
+            exit_code = run(
+                [
+                    "--target-type", "accounts",
+                    "--integration", "ibkr_flex_ws",
+                    "--mode", "dry-run",
+                    "--start-date", "2026-05-01",
+                    "--end-date", "2026-05-14",
+                    "--account-external-ids", "U100",
+                    "--debug-raw-xml-dir", "",
+                ],
+                stderr=stderr,
+                runner=lambda request, database: _result("succeeded"),
+                database_connector=lambda: object(),
+            )
+
+        self.assertEqual(exit_code, 1)
+        self.assertIn("raw XML debug saves are not allowed", stderr.getvalue())
+
     def test_debug_raw_xml_dir_rejected_in_github_actions(self) -> None:
         stderr = StringIO()
         with mock.patch.dict("os.environ", {"GITHUB_ACTIONS": "true"}):

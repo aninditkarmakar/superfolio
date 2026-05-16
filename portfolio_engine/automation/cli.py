@@ -91,8 +91,10 @@ def run(
         end_date = date.fromisoformat(args.end_date)
         account_external_ids = parse_account_external_ids(args.account_external_ids)
 
-        if args.debug_raw_xml_dir and os.environ.get("GITHUB_ACTIONS") == "true":
+        if args.debug_raw_xml_dir is not None and os.environ.get("GITHUB_ACTIONS") == "true":
             raise RuntimeError("raw XML debug saves are not allowed in GitHub Actions environments")
+        if args.debug_raw_xml_dir is not None and args.debug_raw_xml_dir == "":
+            raise RuntimeError("raw XML debug save directory must not be empty")
 
         request = AutomationRunRequest(
             target_type=args.target_type,
