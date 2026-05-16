@@ -677,6 +677,23 @@ def _execute_dry_run_multi_feed(
             child_summaries.append(child_summary)
 
 
+def _derive_child_ingestion_run_id(feed_results: list[dict[str, Any]]) -> str | None:
+    """Return the single ingestion run ID if all non-failed feeds share exactly one, else None.
+
+    When an account has exactly one unique non-empty ingestion run ID across its successful
+    and partially-succeeded feeds, that ID is returned as the child-level FK.  If there are
+    zero or multiple distinct IDs, None is returned so the child row carries no misleading FK;
+    per-feed audit is available via feed_results in the summary.
+    """
+    unique_ids = {
+        fr["ingestion_run_id"]
+        for fr in feed_results
+        if fr.get("status") in ("succeeded", "partially_succeeded")
+        and fr.get("ingestion_run_id")
+    }
+    return next(iter(unique_ids)) if len(unique_ids) == 1 else None
+
+
 def _execute_load_multi_feed(
     *,
     fetch_groups: list[tuple[Any, list[Any], list[tuple[str, Any]]]],
@@ -765,7 +782,7 @@ def _execute_load_multi_feed(
                 payload = adapter.fetch_feed_payload(connection_ctx, feed_ctx, request)
                 for child_id, account in eligible_pairs:
                     try:
-                        _ingestion_run_id, feed_status, feed_summary, _feed_msg = load_payload(
+                        ingestion_run_id, feed_status, feed_summary, _feed_msg = load_payload(
                             payload.xml_text,
                             database=database,
                             brokerage_code=config.brokerage_code,
@@ -780,6 +797,7 @@ def _execute_load_multi_feed(
                             "display_name": feed_ctx.display_name or feed_ctx.feed_key,
                             "status": feed_status,
                             "record_counts": feed_summary["record_counts"],
+                            "ingestion_run_id": ingestion_run_id,
                         })
                     except Exception as exc:
                         err_msg = sanitize_error_message(str(exc))
@@ -850,7 +868,7 @@ def _execute_load_multi_feed(
                 AutomationJobAccountFinalize(
                     automation_job_account_id=child_id,
                     status=child_status,
-                    ingestion_run_id=None,
+                    ingestion_run_id=_derive_child_ingestion_run_id(feed_results),
                     summary=child_summary,
                     error_message=None,
                 )

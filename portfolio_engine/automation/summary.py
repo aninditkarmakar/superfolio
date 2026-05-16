@@ -22,7 +22,7 @@ def empty_record_counts() -> dict[str, dict[str, int]]:
 
 
 _FEED_RESULT_ALLOWED_FIELDS = frozenset(
-    {"feed_key", "display_name", "status", "error_category", "record_counts", "message"}
+    {"feed_key", "display_name", "status", "error_category", "record_counts", "message", "ingestion_run_id"}
 )
 
 

@@ -4404,6 +4404,88 @@ class LoadMultiFeedTests(unittest.TestCase):
         self.assertEqual(feed_result["status"], "failed")
         self.assertEqual(feed_result["error_category"], "ibkr_auth_failed")
 
+    def test_single_feed_load_child_ingestion_run_id_set(self) -> None:
+        """Single-feed load: child-level ingestion_run_id equals the one feed's run ID,
+        and the successful feed result also includes that same ingestion_run_id."""
+        db = _configured_db_with_connection_feeds(["cash"])
+        adapter = FakeMultiFeedAdapter(payload_by_feed={"cash": self.CASH_XML})
+
+        self._run(_make_accounts_load_request("U100"), db=db, adapter=adapter)
+
+        child = self._find_child(db, "child-1")
+        self.assertIsNotNone(child)
+        # Exactly one unique ingestion run ID → set on child-level field.
+        self.assertEqual(child.ingestion_run_id, "ingestion-run-uuid")
+        # The successful feed result must also carry that ingestion_run_id.
+        feed_results = child.summary["feed_results"]
+        self.assertEqual(len(feed_results), 1)
+        self.assertEqual(feed_results[0].get("ingestion_run_id"), "ingestion-run-uuid")
+
+    def test_multi_feed_load_child_ingestion_run_id_none_but_feed_results_carry_ids(self) -> None:
+        """Multi-feed load with two distinct ingestion run IDs: child-level ingestion_run_id
+        is None (multiple IDs → no single FK), but each successful feed result includes
+        its own ingestion_run_id for audit purposes."""
+
+        class _UniqueIngestionRunDB(FakeAutomationDatabase):
+            def __init__(self):
+                super().__init__()
+                self._run_counter = 0
+
+            def start_ingestion_run(self, request) -> str:
+                self._run_counter += 1
+                run_id = f"ingestion-run-{self._run_counter}"
+                self.started_ingestion_runs.append(request)
+                return run_id
+
+        base_db = _configured_db_with_connection_feeds(["cash", "nav"])
+        db = _UniqueIngestionRunDB()
+        db.connection_targets = base_db.connection_targets
+        db.connection_credentials = base_db.connection_credentials
+        db.connection_feeds = base_db.connection_feeds
+
+        adapter = FakeMultiFeedAdapter(
+            payload_by_feed={"cash": self.CASH_XML, "nav": self.NAV_XML}
+        )
+
+        self._run(_make_accounts_load_request("U100"), db=db, adapter=adapter)
+
+        child = self._find_child(db, "child-1")
+        self.assertIsNotNone(child)
+        # Multiple unique run IDs → child-level ingestion_run_id must be None.
+        self.assertIsNone(child.ingestion_run_id)
+        # Each successful feed result must carry its own ingestion_run_id.
+        feed_results = child.summary["feed_results"]
+        self.assertEqual(len(feed_results), 2)
+        for fr in feed_results:
+            if fr["status"] in ("succeeded", "partially_succeeded"):
+                self.assertIn("ingestion_run_id", fr,
+                              f"feed_result for {fr['feed_key']} missing ingestion_run_id")
+                self.assertIsNotNone(fr["ingestion_run_id"])
+        # The two IDs must be distinct (verifying the fake DB returned different values).
+        successful_ids = [
+            fr["ingestion_run_id"]
+            for fr in feed_results
+            if fr["status"] in ("succeeded", "partially_succeeded")
+        ]
+        self.assertEqual(len(set(successful_ids)), 2, "expected two distinct ingestion run IDs")
+
+    def test_failed_feed_result_has_no_ingestion_run_id(self) -> None:
+        """Failed feed results must not include ingestion_run_id."""
+        db = _configured_db_with_connection_feeds(["cash"])
+        adapter = FakeMultiFeedAdapter(
+            payload_by_feed={},
+            failing_feed_keys={"cash"},
+        )
+
+        self._run(_make_accounts_load_request("U100"), db=db, adapter=adapter)
+
+        child = self._find_child(db, "child-1")
+        self.assertIsNotNone(child)
+        feed_results = child.summary["feed_results"]
+        self.assertEqual(len(feed_results), 1)
+        self.assertEqual(feed_results[0]["status"], "failed")
+        self.assertNotIn("ingestion_run_id", feed_results[0])
+
 
 # ---------------------------------------------------------------------------
 # Task 7: Load mode fetch-once refactor — one fetch per feed per connection run
