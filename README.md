@@ -13,7 +13,7 @@ SuperFolio solves the "history gap" problem by stitching together historical dat
 * **Daily Valuation TWR:** Calculates account-level and portfolio-level performance while isolating investment returns from supported external cash flows.
 * **Privacy-First Reporting Posture:** Favors percentages, relative performance, and redacted or synthetic examples in public documentation.
 
-Planned features include automated IBKR Flex Web Service ingestion, a Next.js dashboard/API, public hosting, attribution, and trade-feed views.
+Automated IBKR Flex Web Service ingestion is implemented; a Next.js dashboard/API, scheduled automation, public hosting, and trade-feed views remain planned.
 
 ## 🛠 Tech Stack
 
