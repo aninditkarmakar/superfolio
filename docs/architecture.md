@@ -15,6 +15,7 @@ SuperFolio is currently a Python-first portfolio data engine with a PostgreSQL p
 | TWR engine | `portfolio_engine/twr.py` and `scripts/calculate_twr.py` | Align cash flows to NAV dates and calculate daily linked time-weighted return. |
 | Database TWR CLIs | `portfolio_engine/db_twr.py`, `portfolio_engine/portfolio_db_twr.py`, `scripts/calculate_twr_from_db.py`, and `scripts/calculate_portfolio_twr_from_db.py` | Calculate account-level and portfolio-level TWR from normalized PostgreSQL facts. |
 | Portfolio management | `portfolio_engine/portfolio_cli.py`, `portfolio_engine/portfolio_twr.py`, and `scripts/manage_portfolio.py` | Create logical portfolios, attach accounts, create transfer bridges, and aggregate member account performance. |
+| Automation | `portfolio_engine/automation/`, `scripts/run_automated_ingestion.py`, `scripts/manage_integration_connections.py`, and `.github/workflows/manual-ingestion.yml` | Configure encrypted IBKR Flex Web Service credentials, resolve targets, and run manual automated ingestion jobs. |
 | Migrations | `migrations/` | Manage PostgreSQL tables and functions with Sqitch. |
 
 ## Data flow
@@ -58,10 +59,11 @@ Implemented today:
 - Manual Flex XML dry-run and database load.
 - PostgreSQL schema and function boundary for the MVP ingestion model.
 - Portfolio creation, account attachment, transfer bridges, and portfolio-level database TWR.
+- Manual GitHub Actions automation, multi-login credential setup, and IBKR Flex Web Service ingestion.
 
 Planned but not present as application code:
 
 - Next.js dashboard and API routes.
-- GitHub Actions Flex Web Service automation.
+- Scheduled GitHub Actions automation.
 - Public dashboard hosting.
 - Attribution, trade feed, and multi-broker expansion.

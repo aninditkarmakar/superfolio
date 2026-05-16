@@ -65,6 +65,6 @@ Both dry-run and load are scoped by `--account-external-id`. Supported records f
 
 ## Current limits
 
-- Only manual local files are implemented; Flex Web Service automation is planned.
+- This workflow only covers local files. For IBKR Flex Web Service ingestion, see [Automated Ingestion](automated-ingestion.md).
 - Only `Deposits/Withdrawals` cash transactions are supported by the ingestion workflow.
 - Malformed XML or invalid required attributes fail the command rather than being silently skipped.

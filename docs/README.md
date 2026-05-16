@@ -6,9 +6,11 @@ This directory contains project documentation for the implemented SuperFolio dat
 
 | Topic | File | Use when |
 | --- | --- | --- |
+| User guides | [user-guides/index.md](user-guides/index.md) | You want step-by-step documentation for implemented user-facing CLI and workflow capabilities. |
 | Architecture | [architecture.md](architecture.md) | You need the current system map and implemented/planned boundaries. |
 | Manual Flex ingestion | [workflows/manual-flex-ingestion.md](workflows/manual-flex-ingestion.md) | You are registering accounts, previewing Flex XML, or loading supported records into PostgreSQL. |
 | TWR calculation | [workflows/twr-calculation.md](workflows/twr-calculation.md) | You are calculating daily linked TWR from local Flex XML exports, account database facts, or portfolio database facts. |
+| Automated ingestion | [workflows/automated-ingestion.md](workflows/automated-ingestion.md) | You are configuring or running IBKR Flex Web Service ingestion. |
 | Database schema | [database/schema.md](database/schema.md) | You need table relationships, constraints, or the ingestion data model. |
 | Database functions | [database/functions.md](database/functions.md) | You need PostgreSQL function contracts or bulk ingestion JSON shapes. |
 

@@ -229,5 +229,5 @@ python scripts/run_automated_ingestion.py \
 
 ## Known limitations
 
-- **No schedule:** The workflow is `workflow_dispatch` only. Scheduled daily automation is planned but not yet enabled.
+- **No schedule:** The workflow is `workflow_dispatch` only. Scheduled daily runs are not enabled yet.
 - **Supported record types:** Only `Deposits/Withdrawals` cash transactions and `EquitySummaryByReportDateInBase` daily NAV records are supported by the ingestion functions. Other `CashTransaction` types are counted as unsupported and skipped.
