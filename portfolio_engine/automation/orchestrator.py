@@ -15,6 +15,7 @@ from portfolio_engine.automation.credentials import (
     decrypt_secret,
     load_master_key,
 )
+from portfolio_engine.automation.fetch_errors import safe_fetch_error_category
 from portfolio_engine.automation.ingestion import dry_run_payload, load_payload
 from portfolio_engine.automation.sanitization import sanitize_error_message
 from portfolio_engine.automation.summary import (
@@ -615,7 +616,7 @@ def _execute_dry_run_multi_feed(
                         "feed_key": feed_ctx.feed_key,
                         "display_name": feed_ctx.display_name or feed_ctx.feed_key,
                         "status": "failed",
-                        "error_category": "feed_fetch_failed",
+                        "error_category": safe_fetch_error_category(exc),
                         "record_counts": empty_record_counts(),
                         "message": err_msg,
                     })
@@ -772,7 +773,7 @@ def _execute_load_multi_feed(
                         "feed_key": feed_ctx.feed_key,
                         "display_name": feed_ctx.display_name or feed_ctx.feed_key,
                         "status": "failed",
-                        "error_category": "feed_fetch_failed",
+                        "error_category": safe_fetch_error_category(exc),
                         "record_counts": empty_record_counts(),
                         "message": err_msg,
                     })

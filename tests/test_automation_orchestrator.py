@@ -3807,6 +3807,16 @@ class FakeMultiFeedAdapter:
         return BrokerPayload(xml_text=xml, source_name=f"{feed_context.feed_key}.xml")
 
 
+class StructuredFetchCategoryAdapter(FakeMultiFeedAdapter):
+    def fetch_feed_payload(self, connection_context, feed_context, request):
+        from portfolio_engine.automation.fetch_errors import BrokerFetchError
+        if feed_context.feed_key == "cash":
+            raise BrokerFetchError("ibkr_auth_failed", "ibkr_auth_failed")
+        if feed_context.feed_key == "nav":
+            raise BrokerFetchError("untrusted_category", "untrusted_category")
+        return super().fetch_feed_payload(connection_context, feed_context, request)
+
+
 def _configured_db_with_connection_feeds(feed_keys: list[str]) -> FakeAutomationDatabase:
     """Create a FakeAutomationDatabase with one account and the specified feeds."""
     db = FakeAutomationDatabase()
@@ -4100,6 +4110,24 @@ class DryRunMultiFeedTests(unittest.TestCase):
         self.assertGreater(rc["cash_flows"]["supported"], 0)
         # Nav feed failed; nav counts must remain zero.
         self.assertEqual(rc["daily_nav_snapshots"]["supported"], 0)
+
+    def test_dry_run_feed_result_preserves_allowed_broker_fetch_category(self) -> None:
+        db = _configured_db_with_connection_feeds(["cash"])
+        adapter = StructuredFetchCategoryAdapter()
+
+        self._run(_make_accounts_dry_run_request("U100"), db=db, adapter=adapter)
+
+        child = self._find_child(db, "child-1")
+        self.assertEqual(child.summary["feed_results"][0]["error_category"], "ibkr_auth_failed")
+
+    def test_dry_run_unknown_broker_fetch_category_falls_back(self) -> None:
+        db = _configured_db_with_connection_feeds(["nav"])
+        adapter = StructuredFetchCategoryAdapter()
+
+        self._run(_make_accounts_dry_run_request("U100"), db=db, adapter=adapter)
+
+        child = self._find_child(db, "child-1")
+        self.assertEqual(child.summary["feed_results"][0]["error_category"], "feed_fetch_failed")
 
 
 # ---------------------------------------------------------------------------
