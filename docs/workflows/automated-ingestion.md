@@ -32,7 +32,7 @@ These secrets must be configured before triggering the workflow.
 
 ## Behavior
 
-The `ibkr_flex_ws` adapter fetches Flex XML through IBKR Flex Web Service v3. On each load run it sends a `SendRequest` call using the encrypted `flex_token` and `query_id` credentials, then polls `GetStatement` until the report is ready. The XML is fetched once per connection/feed/run and reused for all eligible accounts in that run.
+The `ibkr_flex_ws` adapter fetches Flex XML through IBKR Flex Web Service v3. On each run (dry-run or load) it sends a `SendRequest` call using the encrypted `flex_token` and `query_id` credentials, then polls `GetStatement` until the report is ready. The XML is fetched once per connection/feed/run and reused for all eligible accounts in that run.
 
 Key behavioral properties:
 - **Date filtering is local.** The `--start-date` and `--end-date` arguments filter records after the XML is retrieved; they are not sent to IBKR. The Flex Query template configured in the IBKR portal controls which date range and accounts are included in the response.
@@ -192,7 +192,7 @@ When migrating from a single-login setup to a multi-login setup, complete these 
 4. **Create connections and store credentials** — run steps 2–4 above for each distinct broker login.
 5. **Assign all automation-target accounts** — run step 5 above so every account that will be resolved by the workflow has an active assignment.
 6. **Validate assignments** — run step 6 above for each configured target before triggering the workflow.
-7. **Trigger a dry-run** — confirm target resolution, assignment lookup, and credential loading succeed. Job lifecycle and per-account outcomes are recorded. No facts are written in dry-run mode.
+7. **Trigger a dry-run** — confirm target resolution, assignment lookup, and credential loading succeed. Job lifecycle and per-account outcomes are recorded. No facts are written in dry-run mode. Note: dry-run makes a live IBKR Flex Web Service call (`SendRequest`/`GetStatement`), so the stored credentials and Flex query must be valid and API-enabled before running.
 
 ## CLI entry point
 
