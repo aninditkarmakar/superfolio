@@ -8,7 +8,8 @@ mode behavior, or failure aggregation.
 from __future__ import annotations
 
 import os
-from typing import Protocol
+from pathlib import Path
+from typing import Callable, Protocol
 
 from portfolio_engine.database import AutomationAccountTarget
 from portfolio_engine.automation.ibkr_flex_client import IbkrFlexWebServiceClient
@@ -36,8 +37,20 @@ class IbkrFlexClient(Protocol):
 class IbkrFlexWebServiceAdapter:
     """Adapter for the IBKR Flex Web Service data source."""
 
-    def __init__(self, *, client: IbkrFlexClient | None = None) -> None:
-        self._client = client or IbkrFlexWebServiceClient()
+    def __init__(
+        self,
+        *,
+        client: IbkrFlexClient | None = None,
+        client_factory: Callable[..., IbkrFlexClient] = IbkrFlexWebServiceClient,
+    ) -> None:
+        self._client = client
+        self._client_factory = client_factory
+
+    def _client_for_request(self, request: AutomationRunRequest) -> IbkrFlexClient:
+        if self._client is not None:
+            return self._client
+        debug_dir = Path(request.debug_raw_xml_dir) if request.debug_raw_xml_dir else None
+        return self._client_factory(debug_raw_xml_dir=debug_dir)
 
     def preflight_validate_config(self, config: IntegrationConfig) -> None:
         """Raise RuntimeError if any required broker-specific env vars are absent or blank.
@@ -95,7 +108,8 @@ class IbkrFlexWebServiceAdapter:
         """Fetch one Flex XML report for one connection feed."""
         token = connection.credentials["flex_token"].reveal()
         query_id = feed.secrets["query_id"].reveal()
-        xml_text = self._client.fetch_report(
+        client = self._client_for_request(request)
+        xml_text = client.fetch_report(
             token=token,
             query_id=query_id,
             connection_id=connection.connection_id,
@@ -117,3 +131,4 @@ def get_adapter(adapter_key: str) -> BrokerAdapter:
     if normalized == "ibkr_flex_ws":
         return IbkrFlexWebServiceAdapter()
     raise ValueError(f"unknown adapter: {adapter_key!r}")
+
