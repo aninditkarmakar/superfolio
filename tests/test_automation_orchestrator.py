@@ -4352,6 +4352,28 @@ class LoadMultiFeedTests(unittest.TestCase):
         self.assertIsNotNone(child)
         self.assertIn("record_counts", child.summary)
 
+    def test_load_feed_result_preserves_allowed_broker_fetch_category(self) -> None:
+        """Load feed result must preserve allowed BrokerFetchError category (ibkr_auth_failed)."""
+        db = _configured_db_with_connection_feeds(["cash"])
+        adapter = StructuredFetchCategoryAdapter()
+
+        self._run(_make_accounts_load_request("U100"), db=db, adapter=adapter)
+
+        child = self._find_child(db, "child-1")
+        self.assertIsNotNone(child)
+        self.assertEqual(child.summary["feed_results"][0]["error_category"], "ibkr_auth_failed")
+
+    def test_load_unknown_broker_fetch_category_falls_back(self) -> None:
+        """Load feed result must fall back to 'feed_fetch_failed' for unknown broker fetch category."""
+        db = _configured_db_with_connection_feeds(["nav"])
+        adapter = StructuredFetchCategoryAdapter()
+
+        self._run(_make_accounts_load_request("U100"), db=db, adapter=adapter)
+
+        child = self._find_child(db, "child-1")
+        self.assertIsNotNone(child)
+        self.assertEqual(child.summary["feed_results"][0]["error_category"], "feed_fetch_failed")
+
 
 # ---------------------------------------------------------------------------
 # Task 14: Overlap blocking is account/date scoped, not connection-scoped
