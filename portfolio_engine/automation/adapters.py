@@ -8,7 +8,7 @@ mode behavior, or failure aggregation.
 from __future__ import annotations
 
 import os
-from pathlib import Path
+from typing import Protocol
 
 from portfolio_engine.database import AutomationAccountTarget
 from portfolio_engine.automation.ibkr_flex_client import IbkrFlexWebServiceClient
@@ -22,10 +22,21 @@ from portfolio_engine.automation.types import (
 )
 
 
+class IbkrFlexClient(Protocol):
+    def fetch_report(
+        self,
+        *,
+        token: str,
+        query_id: str,
+        connection_id: str = "connection",
+        feed_key: str = "feed",
+    ) -> str: ...
+
+
 class IbkrFlexWebServiceAdapter:
     """Adapter for the IBKR Flex Web Service data source."""
 
-    def __init__(self, *, client: IbkrFlexWebServiceClient | None = None) -> None:
+    def __init__(self, *, client: IbkrFlexClient | None = None) -> None:
         self._client = client or IbkrFlexWebServiceClient()
 
     def preflight_validate_config(self, config: IntegrationConfig) -> None:
