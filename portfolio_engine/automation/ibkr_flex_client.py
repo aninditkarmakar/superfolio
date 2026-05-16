@@ -96,9 +96,12 @@ class IbkrFlexWebServiceClient:
             return
         if os.environ.get("GITHUB_ACTIONS") == "true":
             raise RuntimeError("raw XML debug saves are not allowed in GitHub Actions environments")
-        self._debug_raw_xml_dir.mkdir(parents=True, exist_ok=True)
-        filename = f"{_safe_filename_part(connection_id)}-{_safe_filename_part(feed_key)}-{uuid4()}.xml"
-        (self._debug_raw_xml_dir / filename).write_text(xml_text, encoding="utf-8")
+        try:
+            self._debug_raw_xml_dir.mkdir(parents=True, exist_ok=True)
+            filename = f"{_safe_filename_part(connection_id)}-{_safe_filename_part(feed_key)}-{uuid4()}.xml"
+            (self._debug_raw_xml_dir / filename).write_text(xml_text, encoding="utf-8")
+        except OSError:
+            raise BrokerFetchError("ibkr_fetch_failed", "ibkr_fetch_failed") from None
 
     def _send_request(self, *, token: str, query_id: str) -> str:
         try:

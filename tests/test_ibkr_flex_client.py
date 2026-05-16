@@ -1,6 +1,10 @@
 from __future__ import annotations
 
+import os
+import tempfile
 import unittest
+from pathlib import Path
+from unittest import mock
 
 from portfolio_engine.automation.fetch_errors import (
     ALLOWED_BROKER_FETCH_CATEGORIES,
@@ -324,12 +328,6 @@ class IbkrFlexClientLifecycleTests(unittest.TestCase):
             self.assertIs(ctx, client)
 
 
-import os
-import tempfile
-from pathlib import Path
-from unittest import mock
-
-
 class IbkrFlexClientDebugSaveTests(unittest.TestCase):
     def _client_with_success(self, tmp_path: Path) -> tuple[IbkrFlexWebServiceClient, FakeTransport]:
         transport = FakeTransport(
@@ -373,6 +371,51 @@ class IbkrFlexClientDebugSaveTests(unittest.TestCase):
                         transport=FakeTransport([]),
                         debug_raw_xml_dir=Path(tmp),
                     )
+
+    def test_debug_save_disk_write_failure_raises_broker_fetch_error(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            not_a_dir = tmp_path / "not-a-dir"
+            not_a_dir.write_text("I am a file, not a directory", encoding="utf-8")
+            transport = FakeTransport(
+                [
+                    FakeHttpResponse(200, """<FlexStatementResponse><Status>Success</Status><ReferenceCode>secret-ref</ReferenceCode></FlexStatementResponse>"""),
+                    FakeHttpResponse(200, VALID_FLEX_XML),
+                ]
+            )
+            client = IbkrFlexWebServiceClient(
+                transport=transport,
+                sleep=lambda seconds: None,
+                debug_raw_xml_dir=not_a_dir,
+            )
+
+            with self.assertRaises(BrokerFetchError) as ctx:
+                client.fetch_report(token="secret-token", query_id="secret-query", connection_id="conn", feed_key="feed")
+
+            self.assertEqual(ctx.exception.category, "ibkr_fetch_failed")
+            self.assertIsNone(ctx.exception.__cause__)
+            self.assertNotIn("secret-token", str(ctx.exception))
+            self.assertNotIn("secret-query", str(ctx.exception))
+            self.assertNotIn("secret-ref", str(ctx.exception))
+            self.assertNotIn(VALID_FLEX_XML, str(ctx.exception))
+
+    def test_debug_save_github_actions_guard_is_checked_at_fetch_time(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            transport = FakeTransport(
+                [
+                    FakeHttpResponse(200, """<FlexStatementResponse><Status>Success</Status><ReferenceCode>ref-123</ReferenceCode></FlexStatementResponse>"""),
+                    FakeHttpResponse(200, VALID_FLEX_XML),
+                ]
+            )
+            client = IbkrFlexWebServiceClient(
+                transport=transport,
+                sleep=lambda seconds: None,
+                debug_raw_xml_dir=Path(tmp),
+            )
+
+            with mock.patch.dict(os.environ, {"GITHUB_ACTIONS": "true"}):
+                with self.assertRaisesRegex(RuntimeError, "raw XML debug saves are not allowed"):
+                    client.fetch_report(token="token", query_id="query", connection_id="conn", feed_key="feed")
 
 
 if __name__ == "__main__":
