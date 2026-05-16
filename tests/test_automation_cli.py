@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import unittest
 from io import StringIO
+from unittest import mock
 
 from portfolio_engine.automation.cli import run
 
@@ -224,6 +225,51 @@ class AutomationCliTests(unittest.TestCase):
         )
 
         self.assertEqual(exit_code, 0)
+
+    def test_debug_raw_xml_dir_passes_to_request_locally(self) -> None:
+        calls = []
+
+        def fake_runner(request, database):
+            calls.append(request)
+            return _result("succeeded")
+
+        exit_code = run(
+            [
+                "--target-type", "accounts",
+                "--integration", "ibkr_flex_ws",
+                "--mode", "dry-run",
+                "--start-date", "2026-05-01",
+                "--end-date", "2026-05-14",
+                "--account-external-ids", "U100",
+                "--debug-raw-xml-dir", "scratch/debug-xml",
+            ],
+            runner=fake_runner,
+            database_connector=lambda: object(),
+        )
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(calls[0].debug_raw_xml_dir, "scratch/debug-xml")
+
+    def test_debug_raw_xml_dir_rejected_in_github_actions(self) -> None:
+        stderr = StringIO()
+        with mock.patch.dict("os.environ", {"GITHUB_ACTIONS": "true"}):
+            exit_code = run(
+                [
+                    "--target-type", "accounts",
+                    "--integration", "ibkr_flex_ws",
+                    "--mode", "dry-run",
+                    "--start-date", "2026-05-01",
+                    "--end-date", "2026-05-14",
+                    "--account-external-ids", "U100",
+                    "--debug-raw-xml-dir", "scratch/debug-xml",
+                ],
+                stderr=stderr,
+                runner=lambda request, database: _result("succeeded"),
+                database_connector=lambda: object(),
+            )
+
+        self.assertEqual(exit_code, 1)
+        self.assertIn("raw XML debug saves are not allowed", stderr.getvalue())
 
 
 if __name__ == "__main__":

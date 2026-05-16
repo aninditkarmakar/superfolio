@@ -34,6 +34,7 @@ class AutomationRunRequest:
     requested_end_date: date
     portfolio_name: str | None = None
     account_external_ids: tuple[str, ...] = ()
+    debug_raw_xml_dir: str | None = None
 
 
 @dataclass(frozen=True)

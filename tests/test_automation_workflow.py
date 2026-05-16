@@ -175,6 +175,12 @@ class AutomationWorkflowTests(unittest.TestCase):
         text = self._text()
         self.assertIn("ibkr_flex_ws", text)
 
+    def test_workflow_does_not_expose_raw_xml_debug_save(self) -> None:
+        text = self._text()
+
+        self.assertNotIn("debug_raw_xml", text)
+        self.assertNotIn("--debug-raw-xml-dir", text)
+
 
 if __name__ == "__main__":
     unittest.main()

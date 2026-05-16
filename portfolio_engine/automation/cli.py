@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import os
 import sys
 from datetime import date
 from typing import Callable, Any
@@ -56,6 +57,11 @@ def _build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Comma-separated account external IDs (required for target-type=accounts).",
     )
+    parser.add_argument(
+        "--debug-raw-xml-dir",
+        default=None,
+        help="Local-only private directory for raw fetched XML debug files. Rejected in GitHub Actions.",
+    )
     return parser
 
 
@@ -85,6 +91,9 @@ def run(
         end_date = date.fromisoformat(args.end_date)
         account_external_ids = parse_account_external_ids(args.account_external_ids)
 
+        if args.debug_raw_xml_dir and os.environ.get("GITHUB_ACTIONS") == "true":
+            raise RuntimeError("raw XML debug saves are not allowed in GitHub Actions environments")
+
         request = AutomationRunRequest(
             target_type=args.target_type,
             integration_key=args.integration_key,
@@ -93,6 +102,7 @@ def run(
             requested_end_date=end_date,
             portfolio_name=args.portfolio_name,
             account_external_ids=account_external_ids,
+            debug_raw_xml_dir=args.debug_raw_xml_dir,
         )
 
         db_obj = database_connector()
