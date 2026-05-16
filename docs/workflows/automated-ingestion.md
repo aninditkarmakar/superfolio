@@ -32,7 +32,13 @@ These secrets must be configured before triggering the workflow.
 
 ## Behavior
 
-> **⚠️ Adapter fetch not yet implemented.** `IbkrFlexWebServiceAdapter.fetch_payload()` currently raises `NotImplementedError`. The full IBKR Flex Web Service HTTP fetch (token exchange, polling, XML retrieval) is out of scope for the current infrastructure release. Target resolution, overlap detection, lifecycle tracking, per-account summaries, and workflow/CLI infrastructure are all functional, but no broker payloads are fetched or written by the `ibkr_flex_ws` adapter yet. The dry-run and load semantics below describe intended behavior once adapter fetch is implemented.
+The `ibkr_flex_ws` adapter fetches Flex XML through IBKR Flex Web Service v3. On each load run it sends a `SendRequest` call using the encrypted `flex_token` and `query_id` credentials, then polls `GetStatement` until the report is ready. The XML is fetched once per connection/feed/run and reused for all eligible accounts in that run.
+
+Key behavioral properties:
+- **Date filtering is local.** The `--start-date` and `--end-date` arguments filter records after the XML is retrieved; they are not sent to IBKR. The Flex Query template configured in the IBKR portal controls which date range and accounts are included in the response.
+- **Zero-count success does not prove template account inclusion.** A run that completes with zero records for an account is not proof that the Flex Query template covers that account. If an expected account has no records, verify the template configuration in the IBKR Flex portal.
+- **Raw XML stays in memory by default** and is not logged or stored. A local debug option is available (see [Local debug](#local-debug) below).
+- **No schedule is enabled.** All runs are triggered manually via `workflow_dispatch`.
 
 ### Dry-run mode
 
@@ -186,7 +192,7 @@ When migrating from a single-login setup to a multi-login setup, complete these 
 4. **Create connections and store credentials** — run steps 2–4 above for each distinct broker login.
 5. **Assign all automation-target accounts** — run step 5 above so every account that will be resolved by the workflow has an active assignment.
 6. **Validate assignments** — run step 6 above for each configured target before triggering the workflow.
-7. **Trigger a dry-run** — confirm target resolution, assignment lookup, and credential loading succeed. No payloads are fetched (adapter fetch is not yet implemented), but job lifecycle and per-account outcomes are recorded.
+7. **Trigger a dry-run** — confirm target resolution, assignment lookup, and credential loading succeed. Job lifecycle and per-account outcomes are recorded. No facts are written in dry-run mode.
 
 ## CLI entry point
 
@@ -204,8 +210,24 @@ python scripts/run_automated_ingestion.py \
 
 The CLI is implemented in `scripts/run_automated_ingestion.py` with orchestration logic in `portfolio_engine/automation/cli.py` and `portfolio_engine/automation/orchestrator.py`.
 
+## Local debug
+
+The CLI accepts a `--debug-raw-xml-dir` flag that saves the fetched Flex XML to a local directory for inspection:
+
+```bash
+python scripts/run_automated_ingestion.py \
+  --target-type accounts \
+  --integration ibkr_flex_ws \
+  --mode dry-run \
+  --start-date 2026-01-01 \
+  --end-date 2026-01-31 \
+  --account-external-ids U100 \
+  --debug-raw-xml-dir scratch/ibkr-debug
+```
+
+> **⚠️ Local use only.** The `--debug-raw-xml-dir` flag is intended for local development only. The GitHub Actions workflow does not accept or pass this argument. Passing it in the workflow would expose raw broker XML in workflow artifacts, which is prohibited. The `scratch/` directory is git-ignored; keep debug output there and never commit it.
+
 ## Known limitations
 
 - **No schedule:** The workflow is `workflow_dispatch` only. Scheduled daily automation is planned but not yet enabled.
-- **Flex Web Service fetch internals:** The `ibkr_flex_ws` integration boundary is defined in `portfolio_engine/automation/adapters.py`. The full IBKR Flex Web Service HTTP fetch implementation (token exchange, polling, XML retrieval) is out of scope for the current infrastructure release and remains a future task.
 - **Supported record types:** Only `Deposits/Withdrawals` cash transactions and `EquitySummaryByReportDateInBase` daily NAV records are supported by the ingestion functions. Other `CashTransaction` types are counted as unsupported and skipped.

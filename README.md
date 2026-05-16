@@ -268,6 +268,8 @@ Both dry-run and load are account-scoped. The command only maps supported record
 
 The automated ingestion workflow (`scripts/run_automated_ingestion.py`) supports multiple distinct broker logins. Each login is modeled as an **integration connection** in the database. Credentials (tokens, query ids) are stored encrypted and decrypted at runtime using the `SUPERFOLIO_CREDENTIAL_MASTER_KEY` environment variable. No per-login credentials are stored as GitHub repository secrets.
 
+The `ibkr_flex_ws` adapter retrieves Flex XML via an encrypted connection to **IBKR Flex Web Service v3**. Raw XML is kept in memory and is not logged or stored by default; a local-only debug option exists for development use. See [`docs/workflows/automated-ingestion.md`](docs/workflows/automated-ingestion.md) for the full setup guide, behavioral notes, and local debug usage.
+
 Use `scripts/manage_integration_connections.py` to configure connections, credentials, feeds, and account assignments before running the workflow:
 
 ```bash
@@ -305,8 +307,6 @@ python scripts/manage_integration_connections.py validate-assignments \
 python scripts/manage_integration_connections.py list-connections
 python scripts/manage_integration_connections.py list-feeds --connection-id <connection-id>
 ```
-
-> **⚠️ Adapter fetch not yet implemented.** The `ibkr_flex_ws` adapter raises `NotImplementedError` for the actual HTTP fetch. Connection configuration, credential storage/rotation, feed management, assignment validation, and job lifecycle tracking are all functional. See [`docs/workflows/automated-ingestion.md`](docs/workflows/automated-ingestion.md) for the full setup guide and cutover checklist.
 
 ## 📊 Database Migrations
 
@@ -418,7 +418,8 @@ See [`docs/database/schema.md`](docs/database/schema.md) and [`docs/database/fun
 - [x] **Portfolio Layer:** Group registered accounts and calculate portfolio-level TWR with transfer bridge support.
 - [x] **Manual Automation Infrastructure:** Parent automation jobs, account-level outcomes, and manual GitHub Actions trigger for broker ingestion testing.
 - [x] **Multi-Login Credential Management:** Integration connections, encrypted credential storage, feed configuration, and per-account assignments for multi-broker-login automated ingestion.
-- [ ] **Scheduled GitHub Actions Automation:** Scheduled daily Flex XML fetch and TWR recalculation.
+- [x] **Automated IBKR Flex Fetch:** `ibkr_flex_ws` adapter retrieves Flex XML via Flex Web Service v3; raw XML stays in memory by default and is not logged or stored.
+- [ ] **Scheduled GitHub Actions Automation:** Scheduled daily TWR recalculation; no cron schedule is enabled yet.
 - [ ] **Next.js Dashboard:** Dense, scan-friendly chart UI displaying TWR curve and holding weightings.
 - [ ] **Alpha Attribution:** Decompose returns by sector and timing.
 - [ ] **Public Trade Feed:** Recent executions and per-trade P&L (redacted to percentages).
