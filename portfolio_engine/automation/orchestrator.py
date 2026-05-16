@@ -699,7 +699,7 @@ def _execute_load_multi_feed(
       Reuse the returned XML for every eligible account by calling load_payload per account.
     - If a fetch fails, append a failed feed_result to every eligible account.
     - If per-account load parsing fails, append a failed feed_result with
-      error_category "feed_fetch_failed".
+      error_category from safe_fetch_error_category (defaults to "feed_fetch_failed").
     - Derive child status, aggregate counts, build child_summary, and finalize each
       eligible account child row.
     """
@@ -787,7 +787,7 @@ def _execute_load_multi_feed(
                             "feed_key": feed_ctx.feed_key,
                             "display_name": feed_ctx.display_name or feed_ctx.feed_key,
                             "status": "failed",
-                            "error_category": "feed_fetch_failed",
+                            "error_category": safe_fetch_error_category(exc),
                             "record_counts": empty_record_counts(),
                             "message": err_msg,
                         })

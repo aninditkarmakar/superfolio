@@ -4375,6 +4375,35 @@ class LoadMultiFeedTests(unittest.TestCase):
         self.assertIsNotNone(child)
         self.assertEqual(child.summary["feed_results"][0]["error_category"], "feed_fetch_failed")
 
+    def test_load_payload_broker_fetch_error_category_preserved_in_feed_result(self) -> None:
+        """Inner per-account load_payload exception handler uses safe_fetch_error_category.
+
+        When load_payload raises a BrokerFetchError with an allowed category, the feed
+        result must reflect that specific category rather than the hardcoded fallback.
+        """
+        from portfolio_engine.automation.fetch_errors import BrokerFetchError
+
+        class BrokerErrorIngestionDB(FakeAutomationDatabase):
+            def start_ingestion_run(self, request):
+                raise BrokerFetchError("ibkr_auth_failed", "auth failed during ingestion")
+
+        base_db = _configured_db_with_connection_feeds(["cash"])
+        db = BrokerErrorIngestionDB()
+        db.connection_targets = base_db.connection_targets
+        db.connection_credentials = base_db.connection_credentials
+        db.connection_feeds = base_db.connection_feeds
+
+        adapter = FakeMultiFeedAdapter(payload_by_feed={"cash": _MULTI_FEED_CASH_XML})
+
+        self._run(_make_accounts_load_request("U100"), db=db, adapter=adapter)
+
+        child = self._find_child(db, "child-1")
+        self.assertIsNotNone(child)
+        feed_result = child.summary["feed_results"][0]
+        self.assertEqual(feed_result["feed_key"], "cash")
+        self.assertEqual(feed_result["status"], "failed")
+        self.assertEqual(feed_result["error_category"], "ibkr_auth_failed")
+
 
 # ---------------------------------------------------------------------------
 # Task 7: Load mode fetch-once refactor — one fetch per feed per connection run
@@ -4389,8 +4418,18 @@ class LoadMultiFeedFetchOnceTests(unittest.TestCase):
         with mock.patch.dict(os.environ, {"SUPERFOLIO_CREDENTIAL_MASTER_KEY": _TEST_MASTER_KEY}):
             return run_automation(request, database=db, adapter=adapter)
 
+    def _find_child(self, db, child_id: str):
+        for f in db.finalized_children:
+            if f.automation_job_account_id == child_id:
+                return f
+        return None
+
     def test_load_fetches_each_feed_once_for_multiple_accounts(self) -> None:
-        """Two accounts on same connection with one feed: adapter.fetch_feed_payload called once."""
+        """Two accounts on same connection: one fetch, load_payload called for both accounts.
+
+        Asserts that the fetched XML is reused — each account gets its own ingestion run,
+        both children are finalized, and both report the expected status.
+        """
         db = _configured_db_with_connection_feeds(["cash"])
         db.connection_targets = [
             _make_connection_target("account-uuid-1", "U100", connection_id="test-connection-id"),
@@ -4400,7 +4439,16 @@ class LoadMultiFeedFetchOnceTests(unittest.TestCase):
 
         self._run(_make_accounts_load_request("U100", "U200"), db=db, adapter=adapter)
 
+        # Feed fetched exactly once for the connection group (not per account).
         self.assertEqual(adapter.fetched_feed_keys, ["cash"])
+        # load_payload called once per account → one ingestion run per account.
+        self.assertEqual(len(db.started_ingestion_runs), 2)
+        # Both children finalized.
+        self.assertEqual(len(db.finalized_children), 2)
+        # Both accounts succeeded (empty XML → zero records → succeeded).
+        child_statuses = [f.status for f in db.finalized_children]
+        self.assertTrue(all(s == "succeeded" for s in child_statuses),
+                        f"expected both succeeded, got {child_statuses}")
 
     def test_load_does_not_fetch_when_all_accounts_overlap(self) -> None:
         """When all accounts in a connection group are overlapped, no feed is fetched."""
@@ -4411,6 +4459,41 @@ class LoadMultiFeedFetchOnceTests(unittest.TestCase):
         self._run(_make_accounts_load_request("U100"), db=db, adapter=adapter)
 
         self.assertEqual(adapter.fetched_feed_keys, [])
+
+    def test_load_partial_overlap_eligible_account_loaded_overlapped_finalized_failed(self) -> None:
+        """Two accounts on same connection: one overlapped, one eligible.
+
+        - Feed is fetched exactly once (for the eligible subset).
+        - Overlapped child is finalized failed with error_category 'overlapping_load_job'.
+        - Eligible child is finalized succeeded.
+        - Exactly one ingestion run is started (for the eligible account).
+        """
+        db = _configured_db_with_connection_feeds(["cash"])
+        db.connection_targets = [
+            _make_connection_target("account-uuid-1", "U100", connection_id="test-connection-id"),
+            _make_connection_target("account-uuid-2", "U200", connection_id="test-connection-id"),
+        ]
+        # Mark only the first account as overlapping.
+        db.overlapping_load_accounts = {"account-uuid-1"}
+        adapter = FakeMultiFeedAdapter(payload_by_feed={"cash": _MULTI_FEED_CASH_XML})
+
+        self._run(_make_accounts_load_request("U100", "U200"), db=db, adapter=adapter)
+
+        # Feed fetched once (eligible account drives the fetch, not per-account).
+        self.assertEqual(adapter.fetched_feed_keys, ["cash"])
+        # Both children finalized (overlapped + eligible).
+        self.assertEqual(len(db.finalized_children), 2)
+        overlapped_child = self._find_child(db, "child-1")
+        eligible_child = self._find_child(db, "child-2")
+        self.assertIsNotNone(overlapped_child)
+        self.assertIsNotNone(eligible_child)
+        # Overlapped child failed with the correct error category.
+        self.assertEqual(overlapped_child.status, "failed")
+        self.assertEqual(overlapped_child.summary.get("error_category"), "overlapping_load_job")
+        # Eligible child succeeded.
+        self.assertEqual(eligible_child.status, "succeeded")
+        # Exactly one ingestion run started (only for the eligible account).
+        self.assertEqual(len(db.started_ingestion_runs), 1)
 
 
 # ---------------------------------------------------------------------------
