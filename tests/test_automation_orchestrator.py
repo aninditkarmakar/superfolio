@@ -2982,17 +2982,18 @@ class AdapterContextTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "missing_feed_secret"):
             adapter.preflight_connection(connection, (feed,))
 
-    def test_ibkr_adapter_fetch_feed_payload_raises_not_implemented_without_secret_leak(self) -> None:
+    def test_ibkr_adapter_fetch_feed_payload_error_does_not_leak_secrets(self) -> None:
         from portfolio_engine.automation.adapters import IbkrFlexWebServiceAdapter
-        from portfolio_engine.automation.types import (
-            AutomationRunRequest,
-            IntegrationConnectionContext,
-            IntegrationFeedContext,
-        )
+        from portfolio_engine.automation.fetch_errors import BrokerFetchError
+        from portfolio_engine.automation.types import AutomationRunRequest, IntegrationConnectionContext, IntegrationFeedContext
         from portfolio_engine.automation.credentials import SecretValue
         from datetime import date
 
-        adapter = IbkrFlexWebServiceAdapter()
+        class FailingClient:
+            def fetch_report(self, *, token, query_id, connection_id="connection", feed_key="feed"):
+                raise BrokerFetchError("ibkr_auth_failed", "ibkr_auth_failed")
+
+        adapter = IbkrFlexWebServiceAdapter(client=FailingClient())
         connection = IntegrationConnectionContext(
             connection_id="connection-uuid",
             integration_key="ibkr_flex_ws",
@@ -3014,7 +3015,7 @@ class AdapterContextTests(unittest.TestCase):
             requested_end_date=date(2024, 1, 31),
         )
 
-        with self.assertRaises(NotImplementedError) as ctx:
+        with self.assertRaises(BrokerFetchError) as ctx:
             adapter.fetch_feed_payload(connection, feed, request)
 
         error_msg = str(ctx.exception)

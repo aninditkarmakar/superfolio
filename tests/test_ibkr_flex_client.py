@@ -418,5 +418,71 @@ class IbkrFlexClientDebugSaveTests(unittest.TestCase):
                     client.fetch_report(token="token", query_id="query", connection_id="conn", feed_key="feed")
 
 
+from datetime import date
+
+from portfolio_engine.automation.adapters import IbkrFlexWebServiceAdapter
+from portfolio_engine.automation.credentials import SecretValue
+from portfolio_engine.automation.types import AutomationRunRequest, IntegrationConnectionContext, IntegrationFeedContext
+
+
+class FakeIbkrClient:
+    def __init__(self) -> None:
+        self.calls: list[dict[str, str]] = []
+
+    def fetch_report(self, *, token: str, query_id: str, connection_id: str = "connection", feed_key: str = "feed") -> str:
+        self.calls.append(
+            {
+                "token": token,
+                "query_id": query_id,
+                "connection_id": connection_id,
+                "feed_key": feed_key,
+            }
+        )
+        return VALID_FLEX_XML
+
+
+class IbkrAdapterFetchTests(unittest.TestCase):
+    def test_fetch_feed_payload_uses_decrypted_token_and_feed_query_id(self) -> None:
+        client = FakeIbkrClient()
+        adapter = IbkrFlexWebServiceAdapter(client=client)
+        connection = IntegrationConnectionContext(
+            connection_id="connection-uuid",
+            integration_key="ibkr_flex_ws",
+            brokerage_code="IBKR",
+            name="IBKR Login",
+            credentials={"flex_token": SecretValue("plain-token")},
+        )
+        feed = IntegrationFeedContext(
+            feed_id="feed-uuid",
+            feed_key="primary",
+            display_name="Primary",
+            secrets={"query_id": SecretValue("plain-query")},
+        )
+        request = AutomationRunRequest(
+            target_type="accounts",
+            integration_key="ibkr_flex_ws",
+            mode="dry-run",
+            requested_start_date=date(2025, 1, 1),
+            requested_end_date=date(2025, 1, 31),
+            account_external_ids=("U100",),
+        )
+
+        payload = adapter.fetch_feed_payload(connection, feed, request)
+
+        self.assertEqual(payload.xml_text, VALID_FLEX_XML)
+        self.assertEqual(payload.source_name, "ibkr_flex_ws:connection-uuid:primary")
+        self.assertEqual(
+            client.calls,
+            [
+                {
+                    "token": "plain-token",
+                    "query_id": "plain-query",
+                    "connection_id": "connection-uuid",
+                    "feed_key": "primary",
+                }
+            ],
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

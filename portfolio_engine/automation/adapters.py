@@ -8,8 +8,10 @@ mode behavior, or failure aggregation.
 from __future__ import annotations
 
 import os
+from pathlib import Path
 
 from portfolio_engine.database import AutomationAccountTarget
+from portfolio_engine.automation.ibkr_flex_client import IbkrFlexWebServiceClient
 from portfolio_engine.automation.types import (
     AutomationRunRequest,
     BrokerAdapter,
@@ -22,6 +24,9 @@ from portfolio_engine.automation.types import (
 
 class IbkrFlexWebServiceAdapter:
     """Adapter for the IBKR Flex Web Service data source."""
+
+    def __init__(self, *, client: IbkrFlexWebServiceClient | None = None) -> None:
+        self._client = client or IbkrFlexWebServiceClient()
 
     def preflight_validate_config(self, config: IntegrationConfig) -> None:
         """Raise RuntimeError if any required broker-specific env vars are absent or blank.
@@ -76,12 +81,18 @@ class IbkrFlexWebServiceAdapter:
         feed: IntegrationFeedContext,
         request: AutomationRunRequest,
     ) -> BrokerPayload:
-        """Fetch one broker payload for one connection feed.
-
-        Full IBKR Flex Web Service fetch internals are out of scope for this phase.
-        """
-        raise NotImplementedError(
-            "IBKR Flex Web Service fetch internals require the follow-up IBKR fetch design"
+        """Fetch one Flex XML report for one connection feed."""
+        token = connection.credentials["flex_token"].reveal()
+        query_id = feed.secrets["query_id"].reveal()
+        xml_text = self._client.fetch_report(
+            token=token,
+            query_id=query_id,
+            connection_id=connection.connection_id,
+            feed_key=feed.feed_key,
+        )
+        return BrokerPayload(
+            xml_text=xml_text,
+            source_name=f"ibkr_flex_ws:{connection.connection_id}:{feed.feed_key}",
         )
 
 
