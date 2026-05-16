@@ -484,13 +484,13 @@ class IbkrAdapterFetchTests(unittest.TestCase):
         )
 
 
-    def test_fetch_feed_payload_passes_debug_dir_to_client_factory(self) -> None:
-        created_debug_dirs: list[str | None] = []
+    def test_fetch_feed_payload_passes_debug_dir_as_path_to_client_factory(self) -> None:
+        created_debug_dirs: list[Path | None] = []
 
         class RecordingClient(FakeIbkrClient):
             def __init__(self, debug_raw_xml_dir=None):
                 super().__init__()
-                created_debug_dirs.append(str(debug_raw_xml_dir) if debug_raw_xml_dir is not None else None)
+                created_debug_dirs.append(debug_raw_xml_dir)
 
         adapter = IbkrFlexWebServiceAdapter(client_factory=RecordingClient)
         connection = IntegrationConnectionContext(
@@ -518,7 +518,116 @@ class IbkrAdapterFetchTests(unittest.TestCase):
 
         adapter.fetch_feed_payload(connection, feed, request)
 
-        self.assertEqual(created_debug_dirs, ["scratch/debug-xml"])
+        self.assertEqual(len(created_debug_dirs), 1)
+        self.assertIsInstance(created_debug_dirs[0], Path)
+        self.assertEqual(str(created_debug_dirs[0]), "scratch/debug-xml")
+
+    def test_fetch_feed_payload_passes_none_debug_dir_to_client_factory(self) -> None:
+        created_debug_dirs: list[Path | None] = []
+
+        class RecordingClient(FakeIbkrClient):
+            def __init__(self, debug_raw_xml_dir=None):
+                super().__init__()
+                created_debug_dirs.append(debug_raw_xml_dir)
+
+        adapter = IbkrFlexWebServiceAdapter(client_factory=RecordingClient)
+        connection = IntegrationConnectionContext(
+            connection_id="connection-uuid",
+            integration_key="ibkr_flex_ws",
+            brokerage_code="IBKR",
+            name="IBKR Login",
+            credentials={"flex_token": SecretValue("plain-token")},
+        )
+        feed = IntegrationFeedContext(
+            feed_id="feed-uuid",
+            feed_key="primary",
+            display_name="Primary",
+            secrets={"query_id": SecretValue("plain-query")},
+        )
+        request = AutomationRunRequest(
+            target_type="accounts",
+            integration_key="ibkr_flex_ws",
+            mode="dry-run",
+            requested_start_date=date(2025, 1, 1),
+            requested_end_date=date(2025, 1, 31),
+            account_external_ids=("U100",),
+        )
+
+        adapter.fetch_feed_payload(connection, feed, request)
+
+        self.assertEqual(created_debug_dirs, [None])
+
+    def test_fetch_feed_payload_closes_factory_created_client(self) -> None:
+        close_calls: list[str] = []
+
+        class CloseableRecordingClient(FakeIbkrClient):
+            def __init__(self, debug_raw_xml_dir=None):
+                super().__init__()
+
+            def close(self) -> None:
+                close_calls.append("closed")
+
+        adapter = IbkrFlexWebServiceAdapter(client_factory=CloseableRecordingClient)
+        connection = IntegrationConnectionContext(
+            connection_id="connection-uuid",
+            integration_key="ibkr_flex_ws",
+            brokerage_code="IBKR",
+            name="IBKR Login",
+            credentials={"flex_token": SecretValue("plain-token")},
+        )
+        feed = IntegrationFeedContext(
+            feed_id="feed-uuid",
+            feed_key="primary",
+            display_name="Primary",
+            secrets={"query_id": SecretValue("plain-query")},
+        )
+        request = AutomationRunRequest(
+            target_type="accounts",
+            integration_key="ibkr_flex_ws",
+            mode="dry-run",
+            requested_start_date=date(2025, 1, 1),
+            requested_end_date=date(2025, 1, 31),
+            account_external_ids=("U100",),
+        )
+
+        adapter.fetch_feed_payload(connection, feed, request)
+
+        self.assertEqual(close_calls, ["closed"])
+
+    def test_fetch_feed_payload_does_not_close_injected_client(self) -> None:
+        close_calls: list[str] = []
+
+        class CloseableFakeClient(FakeIbkrClient):
+            def close(self) -> None:
+                close_calls.append("closed")
+
+        client = CloseableFakeClient()
+        adapter = IbkrFlexWebServiceAdapter(client=client)
+        connection = IntegrationConnectionContext(
+            connection_id="connection-uuid",
+            integration_key="ibkr_flex_ws",
+            brokerage_code="IBKR",
+            name="IBKR Login",
+            credentials={"flex_token": SecretValue("plain-token")},
+        )
+        feed = IntegrationFeedContext(
+            feed_id="feed-uuid",
+            feed_key="primary",
+            display_name="Primary",
+            secrets={"query_id": SecretValue("plain-query")},
+        )
+        request = AutomationRunRequest(
+            target_type="accounts",
+            integration_key="ibkr_flex_ws",
+            mode="dry-run",
+            requested_start_date=date(2025, 1, 1),
+            requested_end_date=date(2025, 1, 31),
+            account_external_ids=("U100",),
+        )
+
+        adapter.fetch_feed_payload(connection, feed, request)
+
+        self.assertEqual(close_calls, [])
 
 
 if __name__ == "__main__":

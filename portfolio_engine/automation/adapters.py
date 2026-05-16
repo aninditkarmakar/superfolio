@@ -46,11 +46,15 @@ class IbkrFlexWebServiceAdapter:
         self._client = client
         self._client_factory = client_factory
 
-    def _client_for_request(self, request: AutomationRunRequest) -> IbkrFlexClient:
+    def _owned_client_for_request(self, request: AutomationRunRequest) -> tuple[IbkrFlexClient, bool]:
+        """Return ``(client, owned)`` where *owned* is True only for factory-created clients.
+
+        Injected clients are externally owned and must not be closed by the adapter.
+        """
         if self._client is not None:
-            return self._client
+            return self._client, False
         debug_dir = Path(request.debug_raw_xml_dir) if request.debug_raw_xml_dir else None
-        return self._client_factory(debug_raw_xml_dir=debug_dir)
+        return self._client_factory(debug_raw_xml_dir=debug_dir), True
 
     def preflight_validate_config(self, config: IntegrationConfig) -> None:
         """Raise RuntimeError if any required broker-specific env vars are absent or blank.
@@ -108,13 +112,19 @@ class IbkrFlexWebServiceAdapter:
         """Fetch one Flex XML report for one connection feed."""
         token = connection.credentials["flex_token"].reveal()
         query_id = feed.secrets["query_id"].reveal()
-        client = self._client_for_request(request)
-        xml_text = client.fetch_report(
-            token=token,
-            query_id=query_id,
-            connection_id=connection.connection_id,
-            feed_key=feed.feed_key,
-        )
+        client, owned = self._owned_client_for_request(request)
+        try:
+            xml_text = client.fetch_report(
+                token=token,
+                query_id=query_id,
+                connection_id=connection.connection_id,
+                feed_key=feed.feed_key,
+            )
+        finally:
+            if owned:
+                close = getattr(client, "close", None)
+                if callable(close):
+                    close()
         return BrokerPayload(
             xml_text=xml_text,
             source_name=f"ibkr_flex_ws:{connection.connection_id}:{feed.feed_key}",
