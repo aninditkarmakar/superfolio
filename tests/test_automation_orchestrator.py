@@ -201,6 +201,7 @@ class FakeAutomationDatabase:
         # Overlap detection (Task 15)
         self.overlapping_load: bool = False
         self.overlapping_account_ids: set[str] = set()
+        self.overlapping_load_accounts: set[str] = set()
         self.overlap_check_calls: list = []
         # Portfolio id resolution (Issue 1 fix)
         self.portfolio_id_by_name: dict[str, str] = {}
@@ -353,7 +354,7 @@ class FakeAutomationDatabase:
             "requested_end_date": requested_end_date,
             "exclude_automation_job_id": exclude_automation_job_id,
         })
-        return self.overlapping_load or account_id in self.overlapping_account_ids
+        return self.overlapping_load or account_id in self.overlapping_account_ids or account_id in self.overlapping_load_accounts
 
     def list_active_connection_credentials(self, connection_id: str) -> dict[str, bytes]:
         self.credential_calls.append(connection_id)
@@ -4135,8 +4136,8 @@ class DryRunMultiFeedTests(unittest.TestCase):
 # ---------------------------------------------------------------------------
 
 
-def _make_accounts_load_request(external_id: str = "U100"):
-    """Create a load-mode AutomationRunRequest for a single account external ID."""
+def _make_accounts_load_request(*external_ids: str):
+    """Create a load-mode AutomationRunRequest for one or more account external IDs."""
     from portfolio_engine.automation.types import AutomationRunRequest
     return AutomationRunRequest(
         target_type="accounts",
@@ -4144,7 +4145,7 @@ def _make_accounts_load_request(external_id: str = "U100"):
         mode="load",
         requested_start_date=date(2024, 1, 1),
         requested_end_date=date(2024, 1, 31),
-        account_external_ids=(external_id,),
+        account_external_ids=tuple(external_ids),
     )
 
 
@@ -4173,7 +4174,7 @@ class LoadMultiFeedTests(unittest.TestCase):
             payload_by_feed={"cash": self.CASH_XML, "nav": self.NAV_XML}
         )
 
-        result = self._run(_make_accounts_load_request(), db=db, adapter=adapter)
+        result = self._run(_make_accounts_load_request("U100"), db=db, adapter=adapter)
 
         self.assertEqual(result.status, "succeeded")
         child = self._find_child(db, "child-1")
@@ -4190,7 +4191,7 @@ class LoadMultiFeedTests(unittest.TestCase):
             failing_feed_keys={"nav"},
         )
 
-        result = self._run(_make_accounts_load_request(), db=db, adapter=adapter)
+        result = self._run(_make_accounts_load_request("U100"), db=db, adapter=adapter)
 
         self.assertEqual(result.status, "partially_succeeded")
         child = self._find_child(db, "child-1")
@@ -4205,7 +4206,7 @@ class LoadMultiFeedTests(unittest.TestCase):
             failing_feed_keys={"cash", "nav"},
         )
 
-        result = self._run(_make_accounts_load_request(), db=db, adapter=adapter)
+        result = self._run(_make_accounts_load_request("U100"), db=db, adapter=adapter)
 
         self.assertEqual(result.status, "failed")
         child = self._find_child(db, "child-1")
@@ -4220,7 +4221,7 @@ class LoadMultiFeedTests(unittest.TestCase):
             payload_by_feed={"cash": self.CASH_XML, "nav": self.NAV_XML}
         )
 
-        self._run(_make_accounts_load_request(), db=db, adapter=adapter)
+        self._run(_make_accounts_load_request("U100"), db=db, adapter=adapter)
 
         # Exactly one overlap check per account, not one per feed
         self.assertEqual(len(db.overlap_check_calls), 1)
@@ -4233,7 +4234,7 @@ class LoadMultiFeedTests(unittest.TestCase):
             payload_by_feed={"cash": self.CASH_XML, "nav": self.NAV_XML}
         )
 
-        result = self._run(_make_accounts_load_request(), db=db, adapter=adapter)
+        result = self._run(_make_accounts_load_request("U100"), db=db, adapter=adapter)
 
         self.assertEqual(result.status, "failed")
         child = self._find_child(db, "child-1")
@@ -4250,7 +4251,7 @@ class LoadMultiFeedTests(unittest.TestCase):
             payload_by_feed={"cash": self.CASH_XML, "nav": self.NAV_XML}
         )
 
-        self._run(_make_accounts_load_request(), db=db, adapter=adapter)
+        self._run(_make_accounts_load_request("U100"), db=db, adapter=adapter)
 
         child = self._find_child(db, "child-1")
         self.assertIsNotNone(child)
@@ -4268,7 +4269,7 @@ class LoadMultiFeedTests(unittest.TestCase):
             failing_feed_keys={"cash"},
         )
 
-        self._run(_make_accounts_load_request(), db=db, adapter=adapter)
+        self._run(_make_accounts_load_request("U100"), db=db, adapter=adapter)
 
         child = self._find_child(db, "child-1")
         self.assertIsNotNone(child)
@@ -4283,7 +4284,7 @@ class LoadMultiFeedTests(unittest.TestCase):
             payload_by_feed={"cash": self.CASH_XML, "nav": self.NAV_XML}
         )
 
-        self._run(_make_accounts_load_request(), db=db, adapter=adapter)
+        self._run(_make_accounts_load_request("U100"), db=db, adapter=adapter)
 
         # Two feeds succeed → two ingestion runs started and completed
         self.assertEqual(len(db.started_ingestion_runs), 2)
@@ -4297,7 +4298,7 @@ class LoadMultiFeedTests(unittest.TestCase):
             failing_feed_keys={"nav"},
         )
 
-        self._run(_make_accounts_load_request(), db=db, adapter=adapter)
+        self._run(_make_accounts_load_request("U100"), db=db, adapter=adapter)
 
         child = self._find_child(db, "child-1")
         self.assertIsNotNone(child)
@@ -4310,7 +4311,7 @@ class LoadMultiFeedTests(unittest.TestCase):
         db = _configured_db_with_connection_feeds(["cash"])
         adapter = FakeMultiFeedAdapter(payload_by_feed={"cash": self.CASH_XML})
 
-        self._run(_make_accounts_load_request(), db=db, adapter=adapter)
+        self._run(_make_accounts_load_request("U100"), db=db, adapter=adapter)
 
         self.assertIn("child-1", db.running_children)
         mark_idx = db._event_log.index("mark_running:child-1")
@@ -4324,7 +4325,7 @@ class LoadMultiFeedTests(unittest.TestCase):
             payload_by_feed={"cash": self.CASH_XML, "nav": self.NAV_XML}
         )
 
-        self._run(_make_accounts_load_request(), db=db, adapter=adapter)
+        self._run(_make_accounts_load_request("U100"), db=db, adapter=adapter)
 
         self.assertEqual(adapter.fetched_feed_keys, ["cash", "nav"])
 
@@ -4333,7 +4334,7 @@ class LoadMultiFeedTests(unittest.TestCase):
         db = _configured_db_with_connection_feeds([])
         adapter = FakeMultiFeedAdapter(payload_by_feed={})
 
-        result = self._run(_make_accounts_load_request(), db=db, adapter=adapter)
+        result = self._run(_make_accounts_load_request("U100"), db=db, adapter=adapter)
 
         self.assertEqual(result.status, "failed")
         child = self._find_child(db, "child-1")
@@ -4346,7 +4347,7 @@ class LoadMultiFeedTests(unittest.TestCase):
         db = _configured_db_with_connection_feeds(["cash"])
         adapter = FakeMultiFeedAdapter(payload_by_feed={"cash": self.CASH_XML})
 
-        self._run(_make_accounts_load_request(), db=db, adapter=adapter)
+        self._run(_make_accounts_load_request("U100"), db=db, adapter=adapter)
 
         child = self._find_child(db, "child-1")
         self.assertIsNotNone(child)
@@ -4373,6 +4374,43 @@ class LoadMultiFeedTests(unittest.TestCase):
         child = self._find_child(db, "child-1")
         self.assertIsNotNone(child)
         self.assertEqual(child.summary["feed_results"][0]["error_category"], "feed_fetch_failed")
+
+
+# ---------------------------------------------------------------------------
+# Task 7: Load mode fetch-once refactor — one fetch per feed per connection run
+# ---------------------------------------------------------------------------
+
+
+class LoadMultiFeedFetchOnceTests(unittest.TestCase):
+    """Task 7: Load mode fetches each feed once and reuses XML for all eligible accounts."""
+
+    def _run(self, request, db, adapter):
+        from portfolio_engine.automation.orchestrator import run_automation
+        with mock.patch.dict(os.environ, {"SUPERFOLIO_CREDENTIAL_MASTER_KEY": _TEST_MASTER_KEY}):
+            return run_automation(request, database=db, adapter=adapter)
+
+    def test_load_fetches_each_feed_once_for_multiple_accounts(self) -> None:
+        """Two accounts on same connection with one feed: adapter.fetch_feed_payload called once."""
+        db = _configured_db_with_connection_feeds(["cash"])
+        db.connection_targets = [
+            _make_connection_target("account-uuid-1", "U100", connection_id="test-connection-id"),
+            _make_connection_target("account-uuid-2", "U200", connection_id="test-connection-id"),
+        ]
+        adapter = FakeMultiFeedAdapter(payload_by_feed={"cash": _MULTI_FEED_CASH_XML})
+
+        self._run(_make_accounts_load_request("U100", "U200"), db=db, adapter=adapter)
+
+        self.assertEqual(adapter.fetched_feed_keys, ["cash"])
+
+    def test_load_does_not_fetch_when_all_accounts_overlap(self) -> None:
+        """When all accounts in a connection group are overlapped, no feed is fetched."""
+        db = _configured_db_with_connection_feeds(["cash"])
+        db.overlapping_load_accounts = {"account-uuid"}
+        adapter = FakeMultiFeedAdapter(payload_by_feed={"cash": _MULTI_FEED_CASH_XML})
+
+        self._run(_make_accounts_load_request("U100"), db=db, adapter=adapter)
+
+        self.assertEqual(adapter.fetched_feed_keys, [])
 
 
 # ---------------------------------------------------------------------------

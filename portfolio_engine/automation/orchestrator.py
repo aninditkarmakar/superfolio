@@ -692,13 +692,16 @@ def _execute_load_multi_feed(
 
     For each connection group:
     - Guard against empty feed list (no_active_feeds).
-    - For each account, run the date-overlap check once before loading any feed.
-    - If overlap is detected, fail that account without fetching any feeds.
-    - Otherwise, fetch each feed payload in stable (alphabetical) feed_key order,
-      call load_payload per feed (each gets its own ingestion run), accumulate
-      record counts from succeeded/partially-succeeded feeds, and build feed_results.
-    - Derive child status: all succeeded → succeeded; all failed → failed; mixed →
-      partially_succeeded. Finalize each account child row accordingly.
+    - Mark all accounts running, then run overlap checks for every account before
+      fetching any feed. Finalize overlapped accounts as failed immediately.
+    - If no accounts remain eligible after overlap checks, skip all feed fetches.
+    - Fetch each feed payload exactly once per feed per run (not per account).
+      Reuse the returned XML for every eligible account by calling load_payload per account.
+    - If a fetch fails, append a failed feed_result to every eligible account.
+    - If per-account load parsing fails, append a failed feed_result with
+      error_category "feed_fetch_failed".
+    - Derive child status, aggregate counts, build child_summary, and finalize each
+      eligible account child row.
     """
     for connection_ctx, feed_ctxs, group_pairs in fetch_groups:
         # Guard: fail the entire connection group if there are no active feeds.
@@ -721,10 +724,10 @@ def _execute_load_multi_feed(
 
         sorted_feeds = sorted(feed_ctxs, key=lambda f: f.feed_key)
 
+        # Mark all accounts running and run overlap checks before fetching any feed.
+        eligible_pairs: list[tuple[str, Any]] = []
         for child_id, account in group_pairs:
             database.mark_automation_job_account_running(child_id)
-
-            # Run account/date overlap check once before loading any feed.
             if database.has_overlapping_automation_load(
                 integration_key=request.integration_key,
                 account_id=account.account_id,
@@ -744,32 +747,54 @@ def _execute_load_multi_feed(
                 )
                 child_statuses.append("failed")
                 child_summaries.append(overlap_summary)
-                continue
+            else:
+                eligible_pairs.append((child_id, account))
 
-            # Fetch and load each feed in stable alphabetical feed_key order.
-            feed_results: list[dict[str, Any]] = []
-            for feed_ctx in sorted_feeds:
-                try:
-                    payload = adapter.fetch_feed_payload(connection_ctx, feed_ctx, request)
-                    _ingestion_run_id, feed_status, feed_summary, _feed_msg = load_payload(
-                        payload.xml_text,
-                        database=database,
-                        brokerage_code=config.brokerage_code,
-                        account_external_id=account.account_external_id,
-                        source_type=config.source_type,
-                        source_name=payload.source_name,
-                        start_date=str(request.requested_start_date),
-                        end_date=str(request.requested_end_date),
-                    )
-                    feed_results.append({
-                        "feed_key": feed_ctx.feed_key,
-                        "display_name": feed_ctx.display_name or feed_ctx.feed_key,
-                        "status": feed_status,
-                        "record_counts": feed_summary["record_counts"],
-                    })
-                except Exception as exc:
-                    err_msg = sanitize_error_message(str(exc))
-                    feed_results.append({
+        # If no accounts are eligible after overlap checks, skip all feed fetches.
+        if not eligible_pairs:
+            continue
+
+        # Initialize per-account feed results accumulator for eligible accounts.
+        account_feed_results: dict[str, list[dict[str, Any]]] = {
+            cid: [] for cid, _ in eligible_pairs
+        }
+
+        # Fetch each feed exactly once, then call load_payload for each eligible account.
+        for feed_ctx in sorted_feeds:
+            try:
+                payload = adapter.fetch_feed_payload(connection_ctx, feed_ctx, request)
+                for child_id, account in eligible_pairs:
+                    try:
+                        _ingestion_run_id, feed_status, feed_summary, _feed_msg = load_payload(
+                            payload.xml_text,
+                            database=database,
+                            brokerage_code=config.brokerage_code,
+                            account_external_id=account.account_external_id,
+                            source_type=config.source_type,
+                            source_name=payload.source_name,
+                            start_date=str(request.requested_start_date),
+                            end_date=str(request.requested_end_date),
+                        )
+                        account_feed_results[child_id].append({
+                            "feed_key": feed_ctx.feed_key,
+                            "display_name": feed_ctx.display_name or feed_ctx.feed_key,
+                            "status": feed_status,
+                            "record_counts": feed_summary["record_counts"],
+                        })
+                    except Exception as exc:
+                        err_msg = sanitize_error_message(str(exc))
+                        account_feed_results[child_id].append({
+                            "feed_key": feed_ctx.feed_key,
+                            "display_name": feed_ctx.display_name or feed_ctx.feed_key,
+                            "status": "failed",
+                            "error_category": "feed_fetch_failed",
+                            "record_counts": empty_record_counts(),
+                            "message": err_msg,
+                        })
+            except Exception as exc:
+                err_msg = sanitize_error_message(str(exc))
+                for child_id, _ in eligible_pairs:
+                    account_feed_results[child_id].append({
                         "feed_key": feed_ctx.feed_key,
                         "display_name": feed_ctx.display_name or feed_ctx.feed_key,
                         "status": "failed",
@@ -778,8 +803,11 @@ def _execute_load_multi_feed(
                         "message": err_msg,
                     })
 
-            # Derive child status from per-feed statuses.
+        # Finalize each eligible account based on its aggregated feed results.
+        for child_id, account in eligible_pairs:
+            feed_results = account_feed_results[child_id]
             feed_statuses = [fr["status"] for fr in feed_results]
+
             if all(s == "succeeded" for s in feed_statuses):
                 child_status = "succeeded"
                 child_error_category: str | None = None
